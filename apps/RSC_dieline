@@ -1,0 +1,114 @@
+import svgwrite
+import os
+import webbrowser
+
+
+def generate_rsc_dieline(
+    length_mm,
+    width_mm,
+    height_mm,
+    material_thickness_mm=3,
+    glue_flap_mm=None,
+    filename="rsc_dieline.svg"
+):
+    """
+    Generate an SVG dieline for a Regular Slotted Container (RSC)
+    """
+
+    # Defaults
+    if glue_flap_mm is None:
+        glue_flap_mm = max(20, width_mm * 0.4)
+
+    flap_depth = width_mm / 2
+
+    # Panel widths
+    panels = [
+        glue_flap_mm,
+        length_mm,
+        width_mm,
+        length_mm,
+        width_mm
+    ]
+
+    total_width = sum(panels)
+    total_height = height_mm + 2 * flap_depth
+
+    dwg = svgwrite.Drawing(filename, size=(f"{total_width}mm", f"{total_height}mm"))
+
+    CUT = {"stroke": "black", "stroke_width": 1, "fill": "none"}
+    CREASE = {"stroke": "red", "stroke_width": 0.8, "stroke_dasharray": "6,4"}
+
+    x = 0
+
+    # Vertical panel cut lines
+    for w in panels:
+        dwg.add(dwg.line(
+            start=(x, 0),
+            end=(x, total_height),
+            **CUT
+        ))
+        x += w
+
+    # Right edge
+    dwg.add(dwg.line(
+        start=(total_width, 0),
+        end=(total_width, total_height),
+        **CUT
+    ))
+
+    # Horizontal cut lines (top & bottom)
+    dwg.add(dwg.line((0, 0), (total_width, 0), **CUT))
+    dwg.add(dwg.line((0, total_height), (total_width, total_height), **CUT))
+
+    # Body crease lines
+    dwg.add(dwg.line(
+        (0, flap_depth),
+        (total_width, flap_depth),
+        **CREASE
+    ))
+    dwg.add(dwg.line(
+        (0, flap_depth + height_mm),
+        (total_width, flap_depth + height_mm),
+        **CREASE
+    ))
+
+    # Vertical crease lines (panel folds, excluding glue edge)
+    x = glue_flap_mm
+    for w in panels[1:-1]:
+        dwg.add(dwg.line(
+            (x, 0),
+            (x, total_height),
+            **CREASE
+        ))
+        x += w
+
+    # Top & bottom flap vertical cuts (only on main panels)
+    x = glue_flap_mm
+    for w in panels[1:]:
+        dwg.add(dwg.line(
+            (x, 0),
+            (x, flap_depth),
+            **CUT
+        ))
+        dwg.add(dwg.line(
+            (x, flap_depth + height_mm),
+            (x, total_height),
+            **CUT
+        ))
+        x += w
+
+    dwg.save()
+    print(f"Dieline saved as {filename}")
+
+    # Open SVG in default browser
+    abs_path = os.path.abspath(filename)
+    webbrowser.open(f"file://{abs_path}")
+
+
+# Example using your annotated dimensions
+generate_rsc_dieline(
+    length_mm=434,
+    width_mm=214,
+    height_mm=278,
+    filename="rsc_box_dieline.svg"
+)
