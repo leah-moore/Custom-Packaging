@@ -1,28 +1,43 @@
 import time
+
 from .hardware import running_on_raspberry_pi
+from .config import (
+    ROLLER_STEP_PIN,
+    ROLLER_DIR_PIN,
+    ROLLER_ENABLE_PIN,
+    ROLLER_STEPS_PER_MM,
+    DEFAULT_ROLLER_SPEED_MM_S,
+)
 
 
 # ------------------------
 # Base Interface
 # ------------------------
 class BaseRollerDriver:
-    def feed_distance(self, distance_mm, speed_mm_s=10.0, forward=True):
+    def feed_distance(self, distance_mm, speed_mm_s=DEFAULT_ROLLER_SPEED_MM_S, forward=True):
         raise NotImplementedError
 
     def stop(self):
         raise NotImplementedError
 
+    def cleanup(self):
+        pass
+
 
 # ------------------------
-# Simulation (Mac)
+# Simulation (Mac / non-Pi)
 # ------------------------
 class SimulatedRollerDriver(BaseRollerDriver):
-    def feed_distance(self, distance_mm, speed_mm_s=10.0, forward=True):
-        print(f"[SIM] feed {distance_mm} mm @ {speed_mm_s} mm/s")
+    def feed_distance(self, distance_mm, speed_mm_s=DEFAULT_ROLLER_SPEED_MM_S, forward=True):
+        if speed_mm_s <= 0:
+            raise ValueError("speed_mm_s must be > 0")
+
+        direction = "forward" if forward else "reverse"
+        print(f"[SIM ROLLERS] feed {distance_mm} mm @ {speed_mm_s} mm/s ({direction})")
         time.sleep(abs(distance_mm) / speed_mm_s)
 
     def stop(self):
-        print("[SIM] stop rollers")
+        print("[SIM ROLLERS] stop rollers")
 
 
 # ------------------------
@@ -40,24 +55,36 @@ class PiStepperDriver(BaseRollerDriver):
         self.enable_pin = enable_pin
         self.steps_per_mm = steps_per_mm
 
-        lgpio.gpio_claim_output(self.h, self.step_pin)
-        lgpio.gpio_claim_output(self.h, self.dir_pin)
-        lgpio.gpio_claim_output(self.h, self.enable_pin)
+        self.lgpio.gpio_claim_output(self.h, self.step_pin)
+        self.lgpio.gpio_claim_output(self.h, self.dir_pin)
+        self.lgpio.gpio_claim_output(self.h, self.enable_pin)
 
         self.disable()
 
     def enable(self):
+        # Assumes active-low enable on the stepper driver
         self.lgpio.gpio_write(self.h, self.enable_pin, 0)
 
     def disable(self):
         self.lgpio.gpio_write(self.h, self.enable_pin, 1)
 
-    def feed_distance(self, distance_mm, speed_mm_s=10.0, forward=True):
+    def set_direction(self, forward=True):
+        self.lgpio.gpio_write(self.h, self.dir_pin, 1 if forward else 0)
+
+    def feed_distance(self, distance_mm, speed_mm_s=DEFAULT_ROLLER_SPEED_MM_S, forward=True):
+        if speed_mm_s <= 0:
+            raise ValueError("speed_mm_s must be > 0")
+        if self.steps_per_mm <= 0:
+            raise ValueError("steps_per_mm must be > 0")
+
         steps = int(abs(distance_mm) * self.steps_per_mm)
+        if steps == 0:
+            return
+
         delay = 0.5 / (self.steps_per_mm * speed_mm_s)
 
         self.enable()
-        self.lgpio.gpio_write(self.h, self.dir_pin, 1 if forward else 0)
+        self.set_direction(forward)
 
         for _ in range(steps):
             self.lgpio.gpio_write(self.h, self.step_pin, 1)
@@ -68,19 +95,39 @@ class PiStepperDriver(BaseRollerDriver):
     def stop(self):
         self.disable()
 
+    def cleanup(self):
+        try:
+            self.disable()
+        finally:
+            self.lgpio.gpiochip_close(self.h)
+
 
 # ------------------------
 # Public Controller
 # ------------------------
 class RollerController:
-    def __init__(self, step_pin=17, dir_pin=27, enable_pin=22, steps_per_mm=10):
+    def __init__(
+        self,
+        step_pin=ROLLER_STEP_PIN,
+        dir_pin=ROLLER_DIR_PIN,
+        enable_pin=ROLLER_ENABLE_PIN,
+        steps_per_mm=ROLLER_STEPS_PER_MM,
+    ):
         if running_on_raspberry_pi():
-            self.driver = PiStepperDriver(step_pin, dir_pin, enable_pin, steps_per_mm)
+            self.driver = PiStepperDriver(
+                step_pin=step_pin,
+                dir_pin=dir_pin,
+                enable_pin=enable_pin,
+                steps_per_mm=steps_per_mm,
+            )
         else:
             self.driver = SimulatedRollerDriver()
 
-    def feed_distance(self, distance_mm, speed_mm_s=10.0, forward=True):
+    def feed_distance(self, distance_mm, speed_mm_s=DEFAULT_ROLLER_SPEED_MM_S, forward=True):
         self.driver.feed_distance(distance_mm, speed_mm_s, forward)
 
     def stop(self):
         self.driver.stop()
+
+    def cleanup(self):
+        self.driver.cleanup()

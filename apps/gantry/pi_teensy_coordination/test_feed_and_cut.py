@@ -24,6 +24,7 @@ def main():
     finally:
         teensy.disconnect()
         rollers.stop()
+        rollers.cleanup()
 
 
 if __name__ == "__main__":
