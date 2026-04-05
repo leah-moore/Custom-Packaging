@@ -338,14 +338,7 @@ class TouchUI(tk.Tk):
         self.configure(bg=BG)
 
         self.ctrl = GrblHALController()
-        try:
-            self.rollers = RollerController()
-            self._append_console("[INIT] RollerController initialized")
-        except Exception as e:
-            print(f"[WARNING] RollerController init failed: {e}")
-            self.rollers = None
-            self._append_console(f"[WARNING] RollerController unavailable: {e}")
-        
+        self.rollers = RollerController()
         self.roller_jogging = False
         self.roller_jog_thread = None
 
@@ -2678,7 +2671,7 @@ class TouchUI(tk.Tk):
     def _on_jog_press(self, axis_moves: Dict[str, int], btn: tk.Button) -> None:
         btn.config(bg=BTN_PRESSED)
 
-        # Hijack A-axis jog for Pi-side roller control
+        # A-AXIS JOG BUTTONS - Control rollers via GPIO
         if set(axis_moves.keys()) == {"A"}:
             forward = axis_moves["A"] > 0
             self._start_roller_jog(forward=forward)
@@ -2722,26 +2715,34 @@ class TouchUI(tk.Tk):
             return
 
         self.roller_jogging = True
+        self._append_console(f"[ROLLER] Jog started - {('forward' if forward else 'reverse')}")
 
         def roller_loop() -> None:
             try:
+                start_time = time.time()
+                
                 while self.roller_jogging:
+                    # Get current settings each iteration (user can change speed/step)
                     settings = self._get_validated_jog_settings({"A": 1})
-
-                    # A step = mm per pulse of jog
-                    distance_mm = settings.step
-
-                    # A feed is stored as mm/min in the UI, convert to mm/s
+                    
+                    # Feed a small chunk per iteration for smooth continuous motion
+                    distance_mm = settings.step  # mm per iteration
                     speed_mm_s = max(settings.feed / 60.0, 0.1)
-
-                    # Use the rollers controller to feed
+                    
+                    # Feed this chunk
                     self.rollers.feed_distance(
                         distance_mm=distance_mm,
                         speed_mm_s=speed_mm_s,
                         forward=forward,
                     )
-
-                    time.sleep(0.02)
+                    
+                    # Small sleep to allow button release to be responsive
+                    time.sleep(0.05)
+                
+                # Calculate total distance fed
+                elapsed = time.time() - start_time
+                total_mm = elapsed * (settings.feed / 60.0)  # speed * time
+                self._append_console(f"[ROLLER] Jog stopped - fed ~{total_mm:.1f}mm")
 
             except Exception as exc:
                 self._append_console(f"[ROLLER ERROR] {exc}")
@@ -4264,48 +4265,18 @@ class TouchUI(tk.Tk):
                 if not line:
                     self.current_line_index += 1
                     continue
+                
+                # SKIP LINES WITH A-AXIS (roller control disabled for now)
+                if 'A' in line.upper():
+                    self._append_console(f">> [{self.current_line_index + 1}/{total}] {line} [SKIPPED - A-axis disabled]")
+                    self.current_line_index += 1
+                    continue
 
                 pct = int(((self.current_line_index + 1) / total) * 100)
                 self.job_progress_text.set(f"Job: line {self.current_line_index + 1}/{total} ({pct}%)")
                 self.last_controller_reply = None
                 self.waiting_for_ack = True
 
-                # CHECK FOR A-AXIS COMMANDS (send to roller, not Teensy)
-                if 'A' in line.upper() or 'A' in line:
-                    import re
-                    a_match = re.search(r'A([-+]?\d*\.?\d+)', line, re.IGNORECASE)
-                    if a_match and self.rollers:
-                        a_value = float(a_match.group(1))
-                        self._append_console(f">> [{self.current_line_index + 1}/{total}] {line} (→ ROLLER)")
-                        try:
-                            if a_value != 0:
-                                forward = a_value > 0
-                                distance_mm = abs(a_value)
-                                
-                                # Get speed from UI settings (A feed rate in mm/min)
-                                try:
-                                    speed_mm_min = float(self.a_rot_feed_var.get())
-                                    speed_mm_s = speed_mm_min / 60.0
-                                except (ValueError, AttributeError):
-                                    speed_mm_s = 10.0  # Default fallback
-                                
-                                self.rollers.feed_distance(
-                                    distance_mm=distance_mm,
-                                    speed_mm_s=speed_mm_s,
-                                    forward=forward
-                                )
-                                self._append_console(f"   └─ Roller: {distance_mm}mm @ {speed_mm_s:.1f} mm/s")
-                        except Exception as e:
-                            self._append_console(f"[ROLLER ERROR] {e}")
-                        
-                        self.current_line_index += 1
-                        continue
-                    elif a_match and not self.rollers:
-                        self._append_console(f"[WARNING] A-axis in G-code but RollerController unavailable!")
-                        self.current_line_index += 1
-                        continue
-                
-                # Normal XYZ command - send to Teensy
                 self.ctrl.write_line(line)
                 self._append_console(f">> [{self.current_line_index + 1}/{total}] {line}")
 
@@ -4351,13 +4322,6 @@ class TouchUI(tk.Tk):
         self.job_paused = False
 
     def on_close(self) -> None:
-        try:
-            if self.rollers:
-                self.rollers.stop()
-                self.rollers.cleanup()
-        except Exception as e:
-            print(f"[WARNING] Roller cleanup error: {e}")
-        
         self._disconnect()
         self.destroy()
 
