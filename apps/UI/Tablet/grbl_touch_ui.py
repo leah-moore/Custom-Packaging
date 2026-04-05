@@ -517,7 +517,7 @@ class TouchUI(tk.Tk):
         self._build_header()
 
         self.notebook = ttk.Notebook(self)
-        self.notebook.pack(fill="both", expand=True, padx=8, pady=8)
+        self.notebook.pack(fill="both", expand=True, padx=2, pady=2)
 
         # Create tabs (9 tabs: Manual+Setup, Run, Preview, G-code, Vision+DXF, Mesh, Slats, Slats CAM, Diagnostics)
         tabs = {
@@ -545,7 +545,7 @@ class TouchUI(tk.Tk):
         big_font = ("Arial", 18, "bold")
 
         top = tk.Frame(self, bg=BG)
-        top.pack(fill="x", padx=10, pady=4)
+        top.pack(fill="x", padx=5, pady=2)
 
         # LEFT SIDE: Port controls
         left_frame = tk.Frame(top, bg=BG)
@@ -594,7 +594,7 @@ class TouchUI(tk.Tk):
         button_font = ("Arial", 18, "bold")
 
         main = tk.Frame(parent, bg=BG)
-        main.pack(fill="both", expand=True, padx=6, pady=4)
+        main.pack(fill="both", expand=True, padx=2, pady=2)
 
         # TOP SECTION: Left sidebar + Center content (side by side)
         top_section = tk.Frame(main, bg=BG)
@@ -967,7 +967,7 @@ class TouchUI(tk.Tk):
         small_font = ("Courier", 12)
 
         main = tk.Frame(parent, bg=BG)
-        main.pack(fill="both", expand=True, padx=6, pady=4)
+        main.pack(fill="both", expand=True, padx=2, pady=2)
 
         job_box = tk.LabelFrame(main, text="G-code Job", bg=PANEL_BG, fg=FG,
                                 font=default_font, padx=6, pady=4, bd=2, relief="solid")
@@ -1206,7 +1206,7 @@ class TouchUI(tk.Tk):
         mono_font = ("Courier New", 11)
 
         main = tk.Frame(parent, bg=BG)
-        main.pack(fill="both", expand=True, padx=6, pady=4)
+        main.pack(fill="both", expand=True, padx=2, pady=2)
 
         top = tk.Frame(main, bg=BG)
         top.pack(fill="x", pady=(0, 8))
@@ -1246,7 +1246,7 @@ class TouchUI(tk.Tk):
         small_font = ("Arial", 11)
 
         main = tk.Frame(parent, bg=BG)
-        main.pack(fill="both", expand=True, padx=6, pady=4)
+        main.pack(fill="both", expand=True, padx=2, pady=2)
 
         # ===== VISION SECTION =====
         vision_box = tk.LabelFrame(main, text="Vision: Image Stitching", bg=PANEL_BG, fg=FG,
@@ -1373,7 +1373,7 @@ class TouchUI(tk.Tk):
         small_font = ("Arial", 11, "bold")
 
         main = tk.Frame(parent, bg=BG)
-        main.pack(fill="both", expand=True, padx=6, pady=4)
+        main.pack(fill="both", expand=True, padx=2, pady=2)
 
         # TOP: File controls
         top = tk.Frame(main, bg=BG)
@@ -1507,7 +1507,7 @@ class TouchUI(tk.Tk):
         big_font = ("Arial", 12, "bold")
 
         main = tk.Frame(parent, bg=BG)
-        main.pack(fill="both", expand=True, padx=6, pady=4)
+        main.pack(fill="both", expand=True, padx=2, pady=2)
 
         top = tk.Frame(main, bg=BG)
         top.pack(fill="x", pady=(0, 8))
@@ -1608,7 +1608,7 @@ class TouchUI(tk.Tk):
         small_font = ("Arial", 11)
         
         main = tk.Frame(parent, bg=BG)
-        main.pack(fill="both", expand=True, padx=6, pady=4)
+        main.pack(fill="both", expand=True, padx=2, pady=2)
 
         # --- STAGE 1: LOADING (Header Row) ---
         load_frame = tk.Frame(main, bg=PANEL_BG, bd=2, relief="solid")
@@ -1659,7 +1659,7 @@ class TouchUI(tk.Tk):
         small_font = ("Arial", 11)
         
         main = tk.Frame(parent, bg=BG)
-        main.pack(fill="both", expand=True, padx=6, pady=4)
+        main.pack(fill="both", expand=True, padx=2, pady=2)
 
         # --- STAGE 1: LOAD STL & GENERATE ---
         load_frame = tk.LabelFrame(main, text="1. Load STL & Generate Slats", 
@@ -2400,7 +2400,7 @@ class TouchUI(tk.Tk):
         mono_font = ("Courier", 12)
 
         main = tk.Frame(parent, bg=BG)
-        main.pack(fill="both", expand=True, padx=6, pady=4)
+        main.pack(fill="both", expand=True, padx=2, pady=2)
 
         info_box = tk.LabelFrame(main, text="Controller Status", bg=PANEL_BG, fg=FG,
                                  font=default_font, padx=6, pady=4, bd=2, relief="solid")
