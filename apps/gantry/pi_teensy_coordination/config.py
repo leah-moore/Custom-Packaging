@@ -40,9 +40,8 @@ ROLLER_ENABLE_PIN = 22
 # Roller Motion Settings
 # ------------------------
 
-# Steps per mm of material feed
-# (depends on motor steps/rev, microstepping, roller diameter)
-ROLLER_STEPS_PER_MM = 10.0
+# 28 mm direct-drive roller, NEMA 17 (1.8 deg), TMC2209 assumed 16 microsteps
+ROLLER_STEPS_PER_MM = 36.4
 
 # Default speed (mm/s)
-DEFAULT_ROLLER_SPEED_MM_S = 10.0
+DEFAULT_ROLLER_SPEED_MM_S = 20.0
