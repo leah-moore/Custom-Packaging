@@ -338,7 +338,15 @@ class TouchUI(tk.Tk):
         self.configure(bg=BG)
 
         self.ctrl = GrblHALController()
-        self.rollers = RollerController()
+        
+        # Initialize rollers with error handling
+        try:
+            self.rollers = RollerController()
+            print("[INIT] ✓ RollerController initialized")
+        except Exception as e:
+            print(f"[INIT] ✗ RollerController failed: {e}")
+            self.rollers = None
+        
         self.roller_jogging = False
         self.roller_jog_thread = None
 
@@ -2718,11 +2726,18 @@ class TouchUI(tk.Tk):
         self.jog_thread.start()
 
     def _start_roller_jog(self, forward: bool) -> None:
+        if not self.rollers:
+            self._append_console("[ERROR] RollerController not initialized!")
+            return
+        
         if self.roller_jogging:
+            self._append_console("[ROLLER] Already jogging, ignoring...")
             return
 
         self.roller_jogging = True
-        self._append_console(f"[ROLLER] Jog started - {('forward' if forward else 'reverse')}")
+        direction = 'forward' if forward else 'reverse'
+        self._append_console(f"[ROLLER] ✓ Jog started - {direction}")
+        print(f"[ROLLER] Jog started - {direction}")
 
         def roller_loop() -> None:
             try:
@@ -2737,11 +2752,18 @@ class TouchUI(tk.Tk):
                     speed_mm_s = max(settings.feed / 60.0, 0.1)
                     
                     # Feed this chunk
-                    self.rollers.feed_distance(
-                        distance_mm=distance_mm,
-                        speed_mm_s=speed_mm_s,
-                        forward=forward,
-                    )
+                    try:
+                        print(f"[ROLLER] Feeding {distance_mm}mm @ {speed_mm_s:.1f}mm/s")
+                        self.rollers.feed_distance(
+                            distance_mm=distance_mm,
+                            speed_mm_s=speed_mm_s,
+                            forward=forward,
+                        )
+                    except Exception as e:
+                        self._append_console(f"[ROLLER FEED ERROR] {e}")
+                        print(f"[ROLLER FEED ERROR] {e}")
+                        self.roller_jogging = False
+                        break
                     
                     # Small sleep to allow button release to be responsive
                     time.sleep(0.05)
