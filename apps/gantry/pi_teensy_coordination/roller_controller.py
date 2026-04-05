@@ -28,15 +28,28 @@ class BaseRollerDriver:
 # Simulation (Mac / non-Pi)
 # ------------------------
 class SimulatedRollerDriver(BaseRollerDriver):
+    def __init__(self):
+        self._stop_requested = False
+
     def feed_distance(self, distance_mm, speed_mm_s=DEFAULT_ROLLER_SPEED_MM_S, forward=True):
         if speed_mm_s <= 0:
             raise ValueError("speed_mm_s must be > 0")
 
         direction = "forward" if forward else "reverse"
         print(f"[SIM ROLLERS] feed {distance_mm} mm @ {speed_mm_s} mm/s ({direction})")
-        time.sleep(abs(distance_mm) / speed_mm_s)
+
+        self._stop_requested = False
+        total_time = abs(distance_mm) / speed_mm_s if speed_mm_s > 0 else 0.0
+        start = time.time()
+
+        while (time.time() - start) < total_time:
+            if self._stop_requested:
+                print("[SIM ROLLERS] stop requested")
+                break
+            time.sleep(0.01)
 
     def stop(self):
+        self._stop_requested = True
         print("[SIM ROLLERS] stop rollers")
 
 
@@ -54,6 +67,7 @@ class PiStepperDriver(BaseRollerDriver):
         self.dir_pin = dir_pin
         self.enable_pin = enable_pin
         self.steps_per_mm = steps_per_mm
+        self._stop_requested = False
 
         self.lgpio.gpio_claim_output(self.h, self.step_pin)
         self.lgpio.gpio_claim_output(self.h, self.dir_pin)
@@ -79,24 +93,40 @@ class PiStepperDriver(BaseRollerDriver):
 
         steps = int(abs(distance_mm) * self.steps_per_mm)
         if steps == 0:
+            print(f"[PI ROLLERS] zero steps for distance_mm={distance_mm}")
             return
 
         delay = 0.5 / (self.steps_per_mm * speed_mm_s)
+        direction = "forward" if forward else "reverse"
 
+        print(f"[PI ROLLERS] feed {distance_mm} mm @ {speed_mm_s} mm/s ({direction})")
+        print(f"[PI ROLLERS] steps={steps}, delay={delay:.6f}s")
+
+        self._stop_requested = False
         self.enable()
         self.set_direction(forward)
 
-        for _ in range(steps):
-            self.lgpio.gpio_write(self.h, self.step_pin, 1)
-            time.sleep(delay)
-            self.lgpio.gpio_write(self.h, self.step_pin, 0)
-            time.sleep(delay)
+        try:
+            for step_idx in range(steps):
+                if self._stop_requested:
+                    print(f"[PI ROLLERS] stop requested at step {step_idx}/{steps}")
+                    break
+
+                self.lgpio.gpio_write(self.h, self.step_pin, 1)
+                time.sleep(delay)
+                self.lgpio.gpio_write(self.h, self.step_pin, 0)
+                time.sleep(delay)
+        finally:
+            self.disable()
 
     def stop(self):
+        self._stop_requested = True
         self.disable()
+        print("[PI ROLLERS] stop rollers")
 
     def cleanup(self):
         try:
+            self._stop_requested = True
             self.disable()
         finally:
             self.lgpio.gpiochip_close(self.h)
@@ -114,6 +144,7 @@ class RollerController:
         steps_per_mm=ROLLER_STEPS_PER_MM,
     ):
         if running_on_raspberry_pi():
+            print("[ROLLER CTRL] Using PiStepperDriver")
             self.driver = PiStepperDriver(
                 step_pin=step_pin,
                 dir_pin=dir_pin,
@@ -121,6 +152,7 @@ class RollerController:
                 steps_per_mm=steps_per_mm,
             )
         else:
+            print("[ROLLER CTRL] Using SimulatedRollerDriver")
             self.driver = SimulatedRollerDriver()
 
     def feed_distance(self, distance_mm, speed_mm_s=DEFAULT_ROLLER_SPEED_MM_S, forward=True):
