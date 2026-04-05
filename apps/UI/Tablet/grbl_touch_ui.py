@@ -2720,11 +2720,7 @@ class TouchUI(tk.Tk):
             try:
                 while self.roller_jogging:
                     settings = self._get_validated_jog_settings({"A": 1})
-
-                    # A step = mm per pulse of jog
                     distance_mm = settings.step
-
-                    # A feed is stored as mm/min in the UI, convert to mm/s
                     speed_mm_s = max(settings.feed / 60.0, 0.1)
 
                     self.rollers.feed_distance(
@@ -2734,7 +2730,6 @@ class TouchUI(tk.Tk):
                     )
 
                     time.sleep(0.02)
-
             except Exception as exc:
                 self._append_console(f"[ROLLER ERROR] {exc}")
             finally:
