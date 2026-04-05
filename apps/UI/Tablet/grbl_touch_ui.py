@@ -54,6 +54,7 @@ from shapely.geometry import Polygon
 from shapely.ops import unary_union
 
 from gantry.pi_teensy_coordination.roller_controller import RollerController
+from gantry.pi_teensy_coordination.job_runner import JobRunner
 
 # Import our custom modules
 try:
@@ -432,6 +433,8 @@ class TouchUI(tk.Tk):
         self.jog_step_var = tk.StringVar(value="1.0")
         self.jog_feed_var = tk.StringVar(value="1000")
 
+        self.roller_step_var = tk.StringVar(value="5.0")
+        self.roller_feed_var = tk.StringVar(value="300")
         self.a_rot_step_var = tk.StringVar(value="5.0")
         self.a_rot_feed_var = tk.StringVar(value="300")
         self.b_rot_step_var = tk.StringVar(value="5.0")
@@ -680,6 +683,32 @@ class TouchUI(tk.Tk):
                 bg=PANEL_BG, fg=FG, selectcolor=BTN_BLUE, font=("Arial", 8, "bold")
             ).pack(side="left", padx=8)
         self.spindle_oscillation_rpm_var.set("2000")  # Default
+
+        # Roller Step (mm)
+        tk.Label(settings_box, text="Roller Step (mm)", bg=PANEL_BG, fg=FG, font=("Arial", 8, "bold")).grid(row=8, column=0, columnspan=2, sticky="w", pady=(4, 2))
+
+        roller_step_frame = tk.Frame(settings_box, bg=PANEL_BG)
+        roller_step_frame.grid(row=9, column=0, columnspan=4, sticky="w", padx=(20, 0), pady=(0, 6))
+
+        for val in ["0.5", "1", "5", "10"]:
+            tk.Radiobutton(
+                roller_step_frame, text=val, variable=self.roller_step_var, value=val,
+                bg=PANEL_BG, fg=FG, selectcolor=BTN_BLUE, font=("Arial", 8, "bold")
+            ).pack(side="left", padx=8)
+        self.roller_step_var.set("5")
+
+        # Roller Feed (mm/min)
+        tk.Label(settings_box, text="Roller Feed (mm/min)", bg=PANEL_BG, fg=FG, font=("Arial", 8, "bold")).grid(row=10, column=0, columnspan=2, sticky="w", pady=(4, 2))
+
+        roller_feed_frame = tk.Frame(settings_box, bg=PANEL_BG)
+        roller_feed_frame.grid(row=11, column=0, columnspan=4, sticky="w", padx=(20, 0), pady=(0, 6))
+
+        for val in ["100", "300", "600", "1200"]:
+            tk.Radiobutton(
+                roller_feed_frame, text=val, variable=self.roller_feed_var, value=val,
+                bg=PANEL_BG, fg=FG, selectcolor=BTN_BLUE, font=("Arial", 8, "bold")
+            ).pack(side="left", padx=8)
+        self.roller_feed_var.set("300")
 
         # ===== MACHINE CONTROL =====
         ctrl_box = tk.LabelFrame(left, text="Machine Control", bg=PANEL_BG, fg=FG,
@@ -2649,8 +2678,8 @@ class TouchUI(tk.Tk):
         axes = set(axis_moves.keys())
         try:
             if axes == {"ROLLER"}:
-                step = float(self.a_rot_step_var.get())
-                feed = float(self.a_rot_feed_var.get())
+                step = float(self.roller_step_var.get())
+                feed = float(self.roller_feed_var.get())
             elif axes == {"B"}:
                 step = float(self.b_rot_step_var.get())
                 feed = float(self.b_rot_feed_var.get())
@@ -2680,7 +2709,6 @@ class TouchUI(tk.Tk):
         # *** CRITICAL: A-AXIS GOES TO ROLLERS ONLY, NEVER TO TEENSY ***
         if set(axis_moves.keys()) == {"ROLLER"}:
             forward = axis_moves["ROLLER"] > 0
-            self._append_console(f"[ROLLER] Button pressed - {('forward' if forward else 'reverse')}")
             self._start_roller_jog(forward=forward)
             return
         

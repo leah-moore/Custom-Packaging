@@ -138,7 +138,9 @@ class GRBLHALPostProcessor:
             # Roll feed advance
             # ---------------------------------
             elif isinstance(op, FeedAdvance):
-                lines.append(self.cfg.roller_advance_cmd(op.distance))
+                raise RuntimeError(
+                    "FeedAdvance must be executed by JobRunner/RollerController, not emitted by GRBLHALPostProcessor"
+                )
 
         # ------------------------------
         # Program end
