@@ -96,21 +96,31 @@ class PiStepperDriver(BaseRollerDriver):
             print(f"[PI ROLLERS] zero steps for distance_mm={distance_mm}")
             return
 
-        delay = 0.5 / (self.steps_per_mm * speed_mm_s)
+        target_delay = 0.5 / (self.steps_per_mm * speed_mm_s)
         direction = "forward" if forward else "reverse"
 
         print(f"[PI ROLLERS] feed {distance_mm} mm @ {speed_mm_s} mm/s ({direction})")
-        print(f"[PI ROLLERS] steps={steps}, delay={delay:.6f}s")
+        print(f"[PI ROLLERS] steps={steps}, target_delay={target_delay:.6f}s")
 
         self._stop_requested = False
         self.enable()
         self.set_direction(forward)
+
+        # Simple accel ramp: start slower, ramp down to target delay
+        start_delay = max(target_delay * 3.0, 0.0015)
+        ramp_steps = min(80, max(10, steps // 8))
 
         try:
             for step_idx in range(steps):
                 if self._stop_requested:
                     print(f"[PI ROLLERS] stop requested at step {step_idx}/{steps}")
                     break
+
+                if step_idx < ramp_steps:
+                    t = step_idx / max(ramp_steps, 1)
+                    delay = start_delay - (start_delay - target_delay) * t
+                else:
+                    delay = target_delay
 
                 self.lgpio.gpio_write(self.h, self.step_pin, 1)
                 time.sleep(delay)
