@@ -1,12 +1,17 @@
-cadquery==2.7.0
 ezdxf==1.4.3
-lgpio==0.2.2.0
-matplotlib==3.10.8
-numpy==2.4.4
-open3d==0.19.0
+matplotlib
+numpy
 pyserial==3.5
-scipy==1.17.1
 Shapely==2.1.2
 svgpathtools==1.7.2
 svgwrite==1.4.3
 trimesh==4.10.1
+scipy
+
+# Raspberry Pi note:
+# install lgpio with:
+#   sudo apt install python3-lgpio
+
+# Optional / heavy packages:
+# open3d==0.18.0
+# cadquery==2.7.0
