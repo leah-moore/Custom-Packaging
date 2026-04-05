@@ -2671,12 +2671,14 @@ class TouchUI(tk.Tk):
     def _on_jog_press(self, axis_moves: Dict[str, int], btn: tk.Button) -> None:
         btn.config(bg=BTN_PRESSED)
 
-        # A-AXIS JOG BUTTONS - Control rollers via GPIO
+        # *** CRITICAL: A-AXIS GOES TO ROLLERS ONLY, NEVER TO TEENSY ***
         if set(axis_moves.keys()) == {"A"}:
             forward = axis_moves["A"] > 0
+            self._append_console(f"[A-JOG] Button pressed - {('forward' if forward else 'reverse')}")
             self._start_roller_jog(forward=forward)
             return
-
+        
+        # All other axes (XYZ) go to Teensy
         self._start_continuous_jog(axis_moves)
 
     def _on_jog_release(self, btn: tk.Button) -> None:
@@ -2685,6 +2687,11 @@ class TouchUI(tk.Tk):
         self._cancel_jog()
 
     def _start_continuous_jog(self, axis_moves: Dict[str, int]) -> None:
+        # SAFETY: Never allow A axis here
+        if "A" in axis_moves:
+            self._append_console(f"[ERROR] A axis tried to reach Teensy! Blocking...")
+            return
+        
         if not self._safe_to_jog() or self.jogging:
             return
         self.jogging = True
