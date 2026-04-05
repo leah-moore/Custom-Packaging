@@ -776,8 +776,8 @@ class TouchUI(tk.Tk):
         make_jog_button(jog_box, "Z+", {"Z": 1}, 0, 3)
         make_jog_button(jog_box, "Z-", {"Z": -1}, 1, 3)
 
-        make_jog_button(jog_box, "A+", {"A": 1}, 0, 4)
-        make_jog_button(jog_box, "A-", {"A": -1}, 1, 4)
+        make_jog_button(jog_box, "Roller Fwd", {"ROLLER": 1}, 0, 4)
+        make_jog_button(jog_box, "Roller Rev", {"ROLLER": -1}, 1, 4)
 
         make_jog_button(jog_box, "B+", {"B": 1}, 0, 5)
         make_jog_button(jog_box, "B-", {"B": -1}, 1, 5)
@@ -803,9 +803,9 @@ class TouchUI(tk.Tk):
                             font=("Arial", 9, "bold"))
         pos_label.pack(anchor="w", pady=(0, 4))
 
-        axes_info = [("X", self.machine_pos_x_text), ("Y", self.machine_pos_y_text), 
-                     ("Z", self.machine_pos_z_text), ("A", self.machine_pos_a_text),
-                     ("B", self.machine_pos_b_text), ("C", self.machine_pos_c_text)]
+        axes_info = [("X", self.machine_pos_x_text), ("Y", self.machine_pos_y_text),
+             ("Z", self.machine_pos_z_text), ("B", self.machine_pos_b_text),
+             ("C", self.machine_pos_c_text)]
 
         pos_frame = tk.Frame(left_col, bg=PANEL_BG)
         pos_frame.pack(fill="x")
@@ -832,7 +832,6 @@ class TouchUI(tk.Tk):
             ("Zero X", "G10 L20 P1 X0"),
             ("Zero Y", "G10 L20 P1 Y0"),
             ("Zero Z", "G10 L20 P1 Z0"),
-            ("Zero A", "G10 L20 P1 A0"),
             ("Zero B", "G10 L20 P1 B0"),
             ("Zero C", "G10 L20 P1 C0"),
         ]
@@ -871,7 +870,6 @@ class TouchUI(tk.Tk):
             ("Home X", "$HX"),
             ("Home Y", "$HY"),
             ("Home Z", "$HZ"),
-            ("Home A", "$HA"),
             ("Home B", "$HB"),
             ("Home C", "$HC"),
         ]
@@ -2650,7 +2648,7 @@ class TouchUI(tk.Tk):
     def _get_validated_jog_settings(self, axis_moves: Dict[str, int]) -> Optional[JogSettings]:
         axes = set(axis_moves.keys())
         try:
-            if axes == {"A"}:
+            if axes == {"ROLLER"}:
                 step = float(self.a_rot_step_var.get())
                 feed = float(self.a_rot_feed_var.get())
             elif axes == {"B"}:
@@ -2680,9 +2678,9 @@ class TouchUI(tk.Tk):
         btn.config(bg=BTN_PRESSED)
 
         # *** CRITICAL: A-AXIS GOES TO ROLLERS ONLY, NEVER TO TEENSY ***
-        if set(axis_moves.keys()) == {"A"}:
-            forward = axis_moves["A"] > 0
-            self._append_console(f"[A-JOG] Button pressed - {('forward' if forward else 'reverse')}")
+        if set(axis_moves.keys()) == {"ROLLER"}:
+            forward = axis_moves["ROLLER"] > 0
+            self._append_console(f"[ROLLER] Button pressed - {('forward' if forward else 'reverse')}")
             self._start_roller_jog(forward=forward)
             return
         
@@ -2696,8 +2694,8 @@ class TouchUI(tk.Tk):
 
     def _start_continuous_jog(self, axis_moves: Dict[str, int]) -> None:
         # SAFETY: Never allow A axis here
-        if "A" in axis_moves:
-            self._append_console(f"[ERROR] A axis tried to reach Teensy! Blocking...")
+        if "A" in axis_moves or "ROLLER" in axis_moves:
+            self._append_console("[ERROR] Roller control cannot be sent to Teensy jog")
             return
         
         if not self._safe_to_jog() or self.jogging:
@@ -2745,7 +2743,7 @@ class TouchUI(tk.Tk):
                 
                 while self.roller_jogging:
                     # Get current settings each iteration (user can change speed/step)
-                    settings = self._get_validated_jog_settings({"A": 1})
+                    settings = self._get_validated_jog_settings({"ROLLER": 1})
                     
                     # Feed a small chunk per iteration for smooth continuous motion
                     distance_mm = settings.step  # mm per iteration

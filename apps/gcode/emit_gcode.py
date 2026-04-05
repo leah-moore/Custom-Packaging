@@ -238,8 +238,9 @@ def emit_gcode(ops, feed_window_y=200.0):
         # FEED ADVANCE
         # ------------------
         elif isinstance(op, FeedAdvance):
-            y_offset += op.distance
-            lines.append(f"G1 A{y_offset:.3f} F{FEED_ROLLERS} (ADVANCE MATERIAL)")
+            raise RuntimeError(
+                "FeedAdvance must be executed by RollerController, not emitted as G-code"
+            )
 
         # ------------------
         # PIVOT IN AIR
