@@ -10,11 +10,11 @@ from .config import (
 )
 
 
-# ------------------------
-# Base Interface
-# ------------------------
 class BaseRollerDriver:
     def feed_distance(self, distance_mm, speed_mm_s=DEFAULT_ROLLER_SPEED_MM_S, forward=True):
+        raise NotImplementedError
+
+    def start_continuous(self, speed_mm_s=DEFAULT_ROLLER_SPEED_MM_S, forward=True):
         raise NotImplementedError
 
     def stop(self):
@@ -24,9 +24,6 @@ class BaseRollerDriver:
         pass
 
 
-# ------------------------
-# Simulation (Mac / non-Pi)
-# ------------------------
 class SimulatedRollerDriver(BaseRollerDriver):
     def __init__(self):
         self._stop_requested = False
@@ -35,116 +32,134 @@ class SimulatedRollerDriver(BaseRollerDriver):
         if speed_mm_s <= 0:
             raise ValueError("speed_mm_s must be > 0")
 
-        direction = "forward" if forward else "reverse"
-        print(f"[SIM ROLLERS] feed {distance_mm} mm @ {speed_mm_s} mm/s ({direction})")
-
         self._stop_requested = False
-        total_time = abs(distance_mm) / speed_mm_s if speed_mm_s > 0 else 0.0
+        total_time = abs(distance_mm) / speed_mm_s
         start = time.time()
-
         while (time.time() - start) < total_time:
             if self._stop_requested:
-                print("[SIM ROLLERS] stop requested")
                 break
             time.sleep(0.01)
+
+    def start_continuous(self, speed_mm_s=DEFAULT_ROLLER_SPEED_MM_S, forward=True):
+        self._stop_requested = False
+        print(f"[SIM ROLLERS] continuous @ {speed_mm_s} mm/s, forward={forward}")
 
     def stop(self):
         self._stop_requested = True
         print("[SIM ROLLERS] stop rollers")
 
 
-# ------------------------
-# Real Pi Driver (lgpio)
-# ------------------------
 class PiStepperDriver(BaseRollerDriver):
     def __init__(self, step_pin, dir_pin, enable_pin, steps_per_mm):
-        import lgpio
+        import pigpio
 
-        self.lgpio = lgpio
-        self.h = lgpio.gpiochip_open(0)
+        self.pigpio = pigpio
+        self.pi = pigpio.pi()
+        if not self.pi.connected:
+            raise RuntimeError("pigpio daemon not running")
 
         self.step_pin = step_pin
         self.dir_pin = dir_pin
         self.enable_pin = enable_pin
         self.steps_per_mm = steps_per_mm
-        self._stop_requested = False
 
-        self.lgpio.gpio_claim_output(self.h, self.step_pin)
-        self.lgpio.gpio_claim_output(self.h, self.dir_pin)
-        self.lgpio.gpio_claim_output(self.h, self.enable_pin)
+        self.pi.set_mode(self.step_pin, pigpio.OUTPUT)
+        self.pi.set_mode(self.dir_pin, pigpio.OUTPUT)
+        self.pi.set_mode(self.enable_pin, pigpio.OUTPUT)
 
+        self._running = False
+        self._wave_id = None
         self.disable()
 
     def enable(self):
-        # Assumes active-low enable on the stepper driver
-        self.lgpio.gpio_write(self.h, self.enable_pin, 0)
+        self.pi.write(self.enable_pin, 0)  # active low
 
     def disable(self):
-        self.lgpio.gpio_write(self.h, self.enable_pin, 1)
+        self.pi.write(self.enable_pin, 1)
 
     def set_direction(self, forward=True):
-        self.lgpio.gpio_write(self.h, self.dir_pin, 1 if forward else 0)
+        self.pi.write(self.dir_pin, 1 if forward else 0)
 
-    def feed_distance(self, distance_mm, speed_mm_s=DEFAULT_ROLLER_SPEED_MM_S, forward=True):
+    def _clear_wave(self):
+        try:
+            self.pi.wave_tx_stop()
+        except Exception:
+            pass
+
+        if self._wave_id is not None:
+            try:
+                self.pi.wave_delete(self._wave_id)
+            except Exception:
+                pass
+            self._wave_id = None
+
+        try:
+            self.pi.wave_clear()
+        except Exception:
+            pass
+
+    def _start_wave(self, speed_mm_s, forward):
         if speed_mm_s <= 0:
             raise ValueError("speed_mm_s must be > 0")
         if self.steps_per_mm <= 0:
             raise ValueError("steps_per_mm must be > 0")
 
-        steps = int(abs(distance_mm) * self.steps_per_mm)
-        if steps == 0:
-            print(f"[PI ROLLERS] zero steps for distance_mm={distance_mm}")
-            return
+        step_rate = self.steps_per_mm * speed_mm_s  # steps/sec
+        half_period_us = int(500000 / step_rate)    # high or low time
+        half_period_us = max(half_period_us, 20)    # sane lower bound
 
-        target_delay = 0.5 / (self.steps_per_mm * speed_mm_s)
-        direction = "forward" if forward else "reverse"
-
-        print(f"[PI ROLLERS] feed {distance_mm} mm @ {speed_mm_s} mm/s ({direction})")
-        print(f"[PI ROLLERS] steps={steps}, target_delay={target_delay:.6f}s")
-
-        self._stop_requested = False
+        self._clear_wave()
         self.enable()
         self.set_direction(forward)
 
-        # Simple accel ramp: start slower, ramp down to target delay
-        start_delay = max(target_delay * 3.0, 0.0015)
-        ramp_steps = min(80, max(10, steps // 8))
+        pulses = [
+            self.pigpio.pulse(1 << self.step_pin, 0, half_period_us),
+            self.pigpio.pulse(0, 1 << self.step_pin, half_period_us),
+        ]
+
+        self.pi.wave_add_generic(pulses)
+        self._wave_id = self.pi.wave_create()
+        if self._wave_id < 0:
+            raise RuntimeError("Failed to create pigpio wave")
+
+        self.pi.wave_send_repeat(self._wave_id)
+        self._running = True
+
+        print(
+            f"[PI ROLLERS] continuous start speed={speed_mm_s:.3f} mm/s "
+            f"step_rate={step_rate:.1f} steps/s half_period_us={half_period_us}"
+        )
+
+    def start_continuous(self, speed_mm_s=DEFAULT_ROLLER_SPEED_MM_S, forward=True):
+        self._start_wave(speed_mm_s=speed_mm_s, forward=forward)
+
+    def feed_distance(self, distance_mm, speed_mm_s=DEFAULT_ROLLER_SPEED_MM_S, forward=True):
+        steps = int(abs(distance_mm) * self.steps_per_mm)
+        if steps == 0:
+            return
+
+        self._start_wave(speed_mm_s=speed_mm_s, forward=forward)
 
         try:
-            for step_idx in range(steps):
-                if self._stop_requested:
-                    print(f"[PI ROLLERS] stop requested at step {step_idx}/{steps}")
-                    break
-
-                if step_idx < ramp_steps:
-                    t = step_idx / max(ramp_steps, 1)
-                    delay = start_delay - (start_delay - target_delay) * t
-                else:
-                    delay = target_delay
-
-                self.lgpio.gpio_write(self.h, self.step_pin, 1)
-                time.sleep(delay)
-                self.lgpio.gpio_write(self.h, self.step_pin, 0)
-                time.sleep(delay)
+            step_rate = self.steps_per_mm * speed_mm_s
+            duration_s = steps / step_rate
+            time.sleep(duration_s)
         finally:
-            self.disable()
+            self.stop()
 
     def stop(self):
-        self._stop_requested = True
+        self._running = False
+        self._clear_wave()
         self.disable()
         print("[PI ROLLERS] stop rollers")
 
     def cleanup(self):
         try:
-            self._stop_requested = True
-            self.disable()
+            self.stop()
         finally:
-            self.lgpio.gpiochip_close(self.h)
+            self.pi.stop()
 
 
-# ------------------------
-# Public Controller
-# ------------------------
 class RollerController:
     def __init__(
         self,
@@ -167,6 +182,9 @@ class RollerController:
 
     def feed_distance(self, distance_mm, speed_mm_s=DEFAULT_ROLLER_SPEED_MM_S, forward=True):
         self.driver.feed_distance(distance_mm, speed_mm_s, forward)
+
+    def start_continuous(self, speed_mm_s=DEFAULT_ROLLER_SPEED_MM_S, forward=True):
+        self.driver.start_continuous(speed_mm_s, forward)
 
     def stop(self):
         self.driver.stop()

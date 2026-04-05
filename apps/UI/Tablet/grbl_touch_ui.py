@@ -2767,13 +2767,13 @@ class TouchUI(tk.Tk):
             try:
                 settings = self._get_validated_jog_settings({"ROLLER": 1})
                 speed_mm_s = max(settings.feed / 60.0, 0.1)
-
-                # Very large distance so the driver keeps stepping continuously
-                self.rollers.feed_distance(
-                    distance_mm=1000000.0,
+                self.rollers.start_continuous(
                     speed_mm_s=speed_mm_s,
                     forward=forward,
                 )
+
+                while self.roller_jogging:
+                    time.sleep(0.02)
 
             except Exception as exc:
                 self._append_console(f"[ROLLER ERROR] {exc}")
