@@ -1,2 +1,5 @@
 pyserial
+numpy
 matplotlib
+trimesh
+shapely
