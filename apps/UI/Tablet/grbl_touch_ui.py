@@ -53,6 +53,8 @@ from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 from shapely.geometry import Polygon
 from shapely.ops import unary_union
 
+from gantry.pi_teensy_coordination.roller_controller import RollerController
+
 # Import our custom modules
 try:
     from dxf_handler import DXFDieline, VisionDXFAligner
@@ -336,6 +338,9 @@ class TouchUI(tk.Tk):
         self.configure(bg=BG)
 
         self.ctrl = GrblHALController()
+        self.rollers = RollerController()
+        self.roller_jogging = False
+        self.roller_jog_thread = None
 
         # Machine state
         self.machine_state = "Disconnected"
@@ -495,19 +500,19 @@ class TouchUI(tk.Tk):
 
     # ===== UI BUILD =====
     def _build_ui(self) -> None:
-        default_font = ("Arial", 10, "bold")
-        big_font = ("Arial", 12, "bold")
+        default_font = ("Arial", 8, "bold")
+        big_font = ("Arial", 9, "bold")
 
         style = ttk.Style(self)
         style.theme_use("clam")
         style.configure("TLabel", font=default_font, background=BG, foreground=FG)
-        style.configure("TButton", font=default_font, padding=10)
+        style.configure("TButton", font=default_font, padding=3)
         style.configure("TEntry", font=default_font, fieldbackground=ENTRY_BG, foreground=ENTRY_FG)
         style.configure("TCombobox", font=default_font, fieldbackground=ENTRY_BG, background=ENTRY_BG, foreground=ENTRY_FG)
         style.configure("TCheckbutton", background=BG, foreground=FG, font=default_font)
 
         style.configure("TNotebook", background=BG, borderwidth=0)
-        style.configure("TNotebook.Tab", padding=(16, 8), font=default_font)
+        style.configure("TNotebook.Tab", padding=(6, 1), font=default_font)
         style.map(
             "TNotebook.Tab",
             background=[("selected", PANEL_BG), ("!selected", BTN_NEUTRAL)],
@@ -517,7 +522,7 @@ class TouchUI(tk.Tk):
         self._build_header()
 
         self.notebook = ttk.Notebook(self)
-        self.notebook.pack(fill="both", expand=True, padx=2, pady=2)
+        self.notebook.pack(fill="both", expand=True, padx=0, pady=0)
 
         # Create tabs (9 tabs: Manual+Setup, Run, Preview, G-code, Vision+DXF, Mesh, Slats, Slats CAM, Diagnostics)
         tabs = {
@@ -545,7 +550,7 @@ class TouchUI(tk.Tk):
         big_font = ("Arial", 18, "bold")
 
         top = tk.Frame(self, bg=BG)
-        top.pack(fill="x", padx=5, pady=2)
+        top.pack(fill="x", padx=0, pady=0)
 
         # LEFT SIDE: Port controls
         left_frame = tk.Frame(top, bg=BG)
@@ -589,12 +594,12 @@ class TouchUI(tk.Tk):
 
     def _build_manual_setup_tab(self, parent) -> None:
         """Jog tab"""
-        default_font = ("Arial", 10, "bold")
-        big_font = ("Arial", 12, "bold")
+        default_font = ("Arial", 8, "bold")
+        big_font = ("Arial", 9, "bold")
         button_font = ("Arial", 18, "bold")
 
         main = tk.Frame(parent, bg=BG)
-        main.pack(fill="both", expand=True, padx=2, pady=2)
+        main.pack(fill="both", expand=True, padx=0, pady=0)
 
         # TOP SECTION: Left sidebar + Center content (side by side)
         top_section = tk.Frame(main, bg=BG)
@@ -613,11 +618,11 @@ class TouchUI(tk.Tk):
 
         # Merged Jog Settings
         settings_box = tk.LabelFrame(left, text="Jog Settings", bg=PANEL_BG, fg=FG,
-                                     font=("Arial", 12, "bold"), padx=6, pady=4, bd=2, relief="solid")
+                                     font=("Arial", 9, "bold"), padx=2, pady=1, bd=2, relief="solid")
         settings_box.pack(fill="x", pady=(16, 6))
 
         # Feed Distance (mm) - Radio buttons
-        tk.Label(settings_box, text="Feed Distance (mm)", bg=PANEL_BG, fg=FG, font=("Arial", 10, "bold")).grid(row=0, column=0, columnspan=2, sticky="w", pady=(4, 2))
+        tk.Label(settings_box, text="Feed Distance (mm)", bg=PANEL_BG, fg=FG, font=("Arial", 8, "bold")).grid(row=0, column=0, columnspan=2, sticky="w", pady=(4, 2))
         
         feed_distance_frame = tk.Frame(settings_box, bg=PANEL_BG)
         feed_distance_frame.grid(row=1, column=0, columnspan=4, sticky="w", padx=(20, 0), pady=(0, 6))
@@ -625,12 +630,12 @@ class TouchUI(tk.Tk):
         for i, val in enumerate(["0.1", "1", "10", "20"]):
             tk.Radiobutton(
                 feed_distance_frame, text=val, variable=self.jog_step_var, value=val,
-                bg=PANEL_BG, fg=FG, selectcolor=BTN_BLUE, font=("Arial", 10, "bold")
+                bg=PANEL_BG, fg=FG, selectcolor=BTN_BLUE, font=("Arial", 8, "bold")
             ).pack(side="left", padx=8)
         self.jog_step_var.set("1")  # Default
 
         # Feed Rate (mm/min) - Radio buttons
-        tk.Label(settings_box, text="Feed Rate (mm/min)", bg=PANEL_BG, fg=FG, font=("Arial", 10, "bold")).grid(row=2, column=0, columnspan=2, sticky="w", pady=(4, 2))
+        tk.Label(settings_box, text="Feed Rate (mm/min)", bg=PANEL_BG, fg=FG, font=("Arial", 8, "bold")).grid(row=2, column=0, columnspan=2, sticky="w", pady=(4, 2))
         
         feed_rate_frame = tk.Frame(settings_box, bg=PANEL_BG)
         feed_rate_frame.grid(row=3, column=0, columnspan=4, sticky="w", padx=(20, 0), pady=(0, 6))
@@ -638,12 +643,12 @@ class TouchUI(tk.Tk):
         for i, val in enumerate(["100", "500", "1000", "2000"]):
             tk.Radiobutton(
                 feed_rate_frame, text=val, variable=self.jog_feed_var, value=val,
-                bg=PANEL_BG, fg=FG, selectcolor=BTN_BLUE, font=("Arial", 10, "bold")
+                bg=PANEL_BG, fg=FG, selectcolor=BTN_BLUE, font=("Arial", 8, "bold")
             ).pack(side="left", padx=8)
         self.jog_feed_var.set("1000")  # Default
 
         # Feed Angle (deg) - Radio buttons
-        tk.Label(settings_box, text="Feed Angle (deg)", bg=PANEL_BG, fg=FG, font=("Arial", 10, "bold")).grid(row=4, column=0, columnspan=2, sticky="w", pady=(4, 2))
+        tk.Label(settings_box, text="Feed Angle (deg)", bg=PANEL_BG, fg=FG, font=("Arial", 8, "bold")).grid(row=4, column=0, columnspan=2, sticky="w", pady=(4, 2))
         
         feed_angle_frame = tk.Frame(settings_box, bg=PANEL_BG)
         feed_angle_frame.grid(row=5, column=0, columnspan=4, sticky="w", padx=(20, 0), pady=(0, 6))
@@ -651,12 +656,12 @@ class TouchUI(tk.Tk):
         for i, val in enumerate(["1", "5", "10", "45"]):
             tk.Radiobutton(
                 feed_angle_frame, text=val, variable=self.a_rot_step_var, value=val,
-                bg=PANEL_BG, fg=FG, selectcolor=BTN_BLUE, font=("Arial", 10, "bold")
+                bg=PANEL_BG, fg=FG, selectcolor=BTN_BLUE, font=("Arial", 8, "bold")
             ).pack(side="left", padx=8)
         self.a_rot_step_var.set("5")  # Default
 
         # Spindle Oscillation RPM - Radio buttons
-        tk.Label(settings_box, text="Spindle Oscillation (RPM)", bg=PANEL_BG, fg=FG, font=("Arial", 10, "bold")).grid(row=6, column=0, columnspan=2, sticky="w", pady=(4, 2))
+        tk.Label(settings_box, text="Spindle Oscillation (RPM)", bg=PANEL_BG, fg=FG, font=("Arial", 8, "bold")).grid(row=6, column=0, columnspan=2, sticky="w", pady=(4, 2))
         
         spindle_osc_frame = tk.Frame(settings_box, bg=PANEL_BG)
         spindle_osc_frame.grid(row=7, column=0, columnspan=4, sticky="w", padx=(20, 0), pady=(0, 4))
@@ -664,13 +669,13 @@ class TouchUI(tk.Tk):
         for i, val in enumerate(["1000", "2000", "3000", "4000"]):
             tk.Radiobutton(
                 spindle_osc_frame, text=val, variable=self.spindle_oscillation_rpm_var, value=val,
-                bg=PANEL_BG, fg=FG, selectcolor=BTN_BLUE, font=("Arial", 10, "bold")
+                bg=PANEL_BG, fg=FG, selectcolor=BTN_BLUE, font=("Arial", 8, "bold")
             ).pack(side="left", padx=8)
         self.spindle_oscillation_rpm_var.set("2000")  # Default
 
         # ===== MACHINE CONTROL =====
         ctrl_box = tk.LabelFrame(left, text="Machine Control", bg=PANEL_BG, fg=FG,
-                                 font=("Arial", 12, "bold"), padx=5, pady=3, bd=2, relief="solid")
+                                 font=("Arial", 9, "bold"), padx=2, pady=1, bd=2, relief="solid")
         ctrl_box.pack(fill="x", pady=(0, 6))
 
         machine_buttons = [
@@ -694,7 +699,7 @@ class TouchUI(tk.Tk):
                 fg=fgcolor,
                 activebackground=BTN_PRESSED,
                 activeforeground="#000000",
-                font=("Arial", 12, "bold"),
+                font=("Arial", 9, "bold"),
                 bd=2,
                 relief="raised"
             ).grid(row=i, column=0, sticky="ew", pady=2, padx=0)
@@ -707,7 +712,7 @@ class TouchUI(tk.Tk):
             text="E-STOP",
             bg="#CC0000",
             fg="#FFFFFF",
-            font=("Arial", 13, "bold"),
+            font=("Arial", 9, "bold"),
             pady=8,
             relief="raised",
             bd=3
@@ -725,7 +730,7 @@ class TouchUI(tk.Tk):
 
         # Jog Buttons
         jog_box = tk.LabelFrame(center, text="Jog Controls", bg=PANEL_BG, fg=FG,
-                                font=("Arial", 12, "bold"), padx=6, pady=4, bd=2, relief="solid")
+                                font=("Arial", 9, "bold"), padx=2, pady=1, bd=2, relief="solid")
         jog_box.pack(anchor="n", fill="x", expand=False, pady=(16, 0))
 
         self.jog_buttons = []
@@ -774,12 +779,12 @@ class TouchUI(tk.Tk):
 
         # Outputs
         outputs_box = tk.LabelFrame(center, text="Outputs", bg=PANEL_BG, fg=BTN_YELLOW,
-                                    font=("Arial", 12, "bold"), padx=6, pady=4, bd=2, relief="solid")
+                                    font=("Arial", 9, "bold"), padx=2, pady=1, bd=2, relief="solid")
         outputs_box.pack(anchor="n", fill="x", pady=(10, 0))
 
         # ===== POSITION & ZERO (side by side) =====
         pos_zero_box = tk.LabelFrame(center, text="Position & Zero", bg=PANEL_BG, fg=FG,
-                                     font=("Arial", 12, "bold"), padx=6, pady=4, bd=2, relief="solid")
+                                     font=("Arial", 9, "bold"), padx=2, pady=1, bd=2, relief="solid")
         pos_zero_box.pack(anchor="n", fill="x", pady=(8, 0))
 
         # LEFT: Current Position
@@ -787,7 +792,7 @@ class TouchUI(tk.Tk):
         left_col.pack(side="left", fill="both", expand=True, padx=(0, 10))
 
         pos_label = tk.Label(left_col, text="Current Position", bg=PANEL_BG, fg="#FFD54A",
-                            font=("Arial", 12, "bold"))
+                            font=("Arial", 9, "bold"))
         pos_label.pack(anchor="w", pady=(0, 4))
 
         axes_info = [("X", self.machine_pos_x_text), ("Y", self.machine_pos_y_text), 
@@ -803,7 +808,7 @@ class TouchUI(tk.Tk):
                 if idx < len(axes_info):
                     axis_name, pos_var = axes_info[idx]
                     tk.Label(pos_frame, text=f"{axis_name}:", bg=PANEL_BG, fg=FG, 
-                            font=("Arial", 10, "bold"), width=2).grid(row=row, column=col*2, sticky="e", padx=(2, 1), pady=2)
+                            font=("Arial", 8, "bold"), width=2).grid(row=row, column=col*2, sticky="e", padx=(2, 1), pady=2)
                     tk.Label(pos_frame, textvariable=pos_var, bg=PANEL_BG, fg="#FFD54A",
                             font=("Courier", 13, "bold"), width=8, anchor="e").grid(row=row, column=col*2+1, sticky="w", padx=(0, 4), pady=2)
 
@@ -812,7 +817,7 @@ class TouchUI(tk.Tk):
         right_col.pack(side="left", fill="both", expand=True, padx=(10, 0))
 
         zero_label = tk.Label(right_col, text="Set Zero", bg=PANEL_BG, fg="#FFD54A",
-                             font=("Arial", 12, "bold"))
+                             font=("Arial", 9, "bold"))
         zero_label.pack(anchor="w", pady=(0, 4))
 
         zero_buttons = [
@@ -838,7 +843,7 @@ class TouchUI(tk.Tk):
                 fg=BTN_NEUTRAL_FG,
                 activebackground=BTN_PRESSED,
                 activeforeground="#000000",
-                font=("Arial", 12, "bold"),
+                font=("Arial", 9, "bold"),
                 width=10,
                 height=1,
                 bd=2,
@@ -851,7 +856,7 @@ class TouchUI(tk.Tk):
 
         # ===== HOME AXIS - Full width panel at bottom =====
         home_box = tk.LabelFrame(home_section, text="Home Axis", bg=PANEL_BG, fg=FG,
-                                font=("Arial", 12, "bold"), padx=10, pady=12, bd=2, relief="solid")
+                                font=("Arial", 9, "bold"), padx=10, pady=12, bd=2, relief="solid")
         home_box.pack(anchor="n", fill="x", pady=(0, 0))
 
         home_buttons = [
@@ -877,7 +882,7 @@ class TouchUI(tk.Tk):
                 fg=BTN_BLUE_FG,
                 activebackground=BTN_PRESSED,
                 activeforeground="#000000",
-                font=("Arial", 10, "bold"),
+                font=("Arial", 8, "bold"),
                 width=18,
                 height=2,
                 bd=2,
@@ -962,15 +967,15 @@ class TouchUI(tk.Tk):
 
     def _build_run_tab(self, parent) -> None:
         """Job execution tab"""
-        default_font = ("Arial", 10, "bold")
-        big_font = ("Arial", 12, "bold")
+        default_font = ("Arial", 8, "bold")
+        big_font = ("Arial", 9, "bold")
         small_font = ("Courier", 12)
 
         main = tk.Frame(parent, bg=BG)
-        main.pack(fill="both", expand=True, padx=2, pady=2)
+        main.pack(fill="both", expand=True, padx=0, pady=0)
 
         job_box = tk.LabelFrame(main, text="G-code Job", bg=PANEL_BG, fg=FG,
-                                font=default_font, padx=6, pady=4, bd=2, relief="solid")
+                                font=default_font, padx=2, pady=1, bd=2, relief="solid")
         job_box.pack(fill="x", pady=(0, 8))
 
         tk.Label(job_box, textvariable=self.file_text, bg=PANEL_BG, fg=FG,
@@ -1010,7 +1015,7 @@ class TouchUI(tk.Tk):
         ).grid(row=0, column=4, padx=4, pady=4)
 
         mdi_box = tk.LabelFrame(main, text="MDI / Console", bg=PANEL_BG, fg=FG,
-                                font=default_font, padx=6, pady=4, bd=2, relief="solid")
+                                font=default_font, padx=2, pady=1, bd=2, relief="solid")
         mdi_box.pack(fill="both", expand=True)
 
         mdi_top = tk.Frame(mdi_box, bg=PANEL_BG)
@@ -1042,8 +1047,8 @@ class TouchUI(tk.Tk):
 
     def _build_unified_preview_tab(self, parent) -> None:
         """Professional CNC preview with playback controls and timeline scrubber"""
-        default_font = ("Arial", 10, "bold")
-        big_font = ("Arial", 12, "bold")
+        default_font = ("Arial", 8, "bold")
+        big_font = ("Arial", 9, "bold")
         control_font = ("Arial", 12, "bold")
 
         main = tk.Frame(parent, bg=BG)
@@ -1063,13 +1068,13 @@ class TouchUI(tk.Tk):
         tk.Radiobutton(
             mode_frame, text="2D XY", variable=self.preview_mode, value="2d",
             bg=PANEL_BG, fg=FG, activebackground=BG, selectcolor=BTN_BLUE,
-            font=("Arial", 12, "bold"), command=self._switch_preview_mode
+            font=("Arial", 9, "bold"), command=self._switch_preview_mode
         ).pack(side="left", padx=8)
         
         tk.Radiobutton(
             mode_frame, text="3D Path", variable=self.preview_mode, value="3d",
             bg=PANEL_BG, fg=FG, activebackground=BG, selectcolor=BTN_BLUE,
-            font=("Arial", 12, "bold"), command=self._switch_preview_mode
+            font=("Arial", 9, "bold"), command=self._switch_preview_mode
         ).pack(side="left", padx=8)
 
         # Center: Playback controls
@@ -1163,7 +1168,7 @@ class TouchUI(tk.Tk):
             highlightthickness=0,
             command=self._preview_scrubber_moved
         )
-        self.preview_scrubber.pack(fill="both", expand=True, padx=5, pady=3)
+        self.preview_scrubber.pack(fill="both", expand=True, padx=2, pady=1)
 
         # Show 2D by default
         self._switch_preview_mode()
@@ -1201,12 +1206,12 @@ class TouchUI(tk.Tk):
 
     def _build_gcode_viewer_tab(self, parent) -> None:
         """G-code viewer"""
-        default_font = ("Arial", 10, "bold")
-        big_font = ("Arial", 12, "bold")
+        default_font = ("Arial", 8, "bold")
+        big_font = ("Arial", 9, "bold")
         mono_font = ("Courier New", 11)
 
         main = tk.Frame(parent, bg=BG)
-        main.pack(fill="both", expand=True, padx=2, pady=2)
+        main.pack(fill="both", expand=True, padx=0, pady=0)
 
         top = tk.Frame(main, bg=BG)
         top.pack(fill="x", pady=(0, 8))
@@ -1241,16 +1246,16 @@ class TouchUI(tk.Tk):
 
     def _build_vision_dxf_tab(self, parent) -> None:
         """Vision + DXF integrated tab"""
-        default_font = ("Arial", 10, "bold")
-        big_font = ("Arial", 12, "bold")
+        default_font = ("Arial", 8, "bold")
+        big_font = ("Arial", 9, "bold")
         small_font = ("Arial", 11)
 
         main = tk.Frame(parent, bg=BG)
-        main.pack(fill="both", expand=True, padx=2, pady=2)
+        main.pack(fill="both", expand=True, padx=0, pady=0)
 
         # ===== VISION SECTION =====
         vision_box = tk.LabelFrame(main, text="Vision: Image Stitching", bg=PANEL_BG, fg=FG,
-                                  font=default_font, padx=6, pady=4, bd=2, relief="solid")
+                                  font=default_font, padx=2, pady=1, bd=2, relief="solid")
         vision_box.pack(fill="x", pady=(0, 10))
 
         vision_top = tk.Frame(vision_box, bg=PANEL_BG)
@@ -1279,7 +1284,7 @@ class TouchUI(tk.Tk):
 
         # ===== DXF SECTION =====
         dxf_box = tk.LabelFrame(main, text="DXF: Die-line Placement", bg=PANEL_BG, fg=FG,
-                               font=default_font, padx=6, pady=4, bd=2, relief="solid")
+                               font=default_font, padx=2, pady=1, bd=2, relief="solid")
         dxf_box.pack(fill="x", pady=(0, 10))
 
         dxf_top = tk.Frame(dxf_box, bg=PANEL_BG)
@@ -1302,7 +1307,7 @@ class TouchUI(tk.Tk):
 
         # ===== TRANSFORM CONTROLS =====
         trans_box = tk.LabelFrame(main, text="Die-line Placement Controls", bg=PANEL_BG, fg=FG,
-                                  font=default_font, padx=6, pady=4, bd=2, relief="solid")
+                                  font=default_font, padx=2, pady=1, bd=2, relief="solid")
         trans_box.pack(fill="x", pady=(0, 10))
 
         # Grid layout for controls
@@ -1336,15 +1341,15 @@ class TouchUI(tk.Tk):
         
         tk.Label(zoom_frame, text="Zoom:", bg=PANEL_BG, fg=FG, font=small_font).pack(side="left", padx=(0, 4))
         tk.Button(zoom_frame, text="−", command=lambda: self._zoom_dxf(-1),
-                 bg=BTN_NEUTRAL, fg=BTN_NEUTRAL_FG, font=("Arial", 10, "bold"), width=3, bd=2, relief="raised").pack(side="left", padx=2)
+                 bg=BTN_NEUTRAL, fg=BTN_NEUTRAL_FG, font=("Arial", 8, "bold"), width=3, bd=2, relief="raised").pack(side="left", padx=2)
         tk.Button(zoom_frame, text="+", command=lambda: self._zoom_dxf(1),
-                 bg=BTN_NEUTRAL, fg=BTN_NEUTRAL_FG, font=("Arial", 10, "bold"), width=3, bd=2, relief="raised").pack(side="left", padx=2)
+                 bg=BTN_NEUTRAL, fg=BTN_NEUTRAL_FG, font=("Arial", 8, "bold"), width=3, bd=2, relief="raised").pack(side="left", padx=2)
         tk.Button(zoom_frame, text="Fit View", command=self._dxf_fit_view,
                  bg=BTN_NEUTRAL, fg=BTN_NEUTRAL_FG, font=small_font, width=10, bd=3, relief="raised").pack(side="left", padx=(4, 0))
 
         # ===== PREVIEW CANVAS =====
         canvas_frame = tk.LabelFrame(main, text="Preview", bg=PANEL_BG, fg=FG,
-                                    font=default_font, padx=6, pady=4, bd=2, relief="solid")
+                                    font=default_font, padx=2, pady=1, bd=2, relief="solid")
         canvas_frame.pack(fill="both", expand=True)
 
         self.vision_dxf_canvas = tk.Canvas(
@@ -1368,12 +1373,12 @@ class TouchUI(tk.Tk):
 
     def _build_mesh_tab(self, parent) -> None:
         """Mesh viewer"""
-        default_font = ("Arial", 10, "bold")
-        big_font = ("Arial", 12, "bold")
+        default_font = ("Arial", 8, "bold")
+        big_font = ("Arial", 9, "bold")
         small_font = ("Arial", 11, "bold")
 
         main = tk.Frame(parent, bg=BG)
-        main.pack(fill="both", expand=True, padx=2, pady=2)
+        main.pack(fill="both", expand=True, padx=0, pady=0)
 
         # TOP: File controls
         top = tk.Frame(main, bg=BG)
@@ -1406,25 +1411,25 @@ class TouchUI(tk.Tk):
         tk.Button(
             controls, text="↶", command=lambda: self._adjust_mesh_view(-15, 0),
             bg=BTN_NEUTRAL, fg=BTN_NEUTRAL_FG, activebackground=BTN_PRESSED,
-            font=("Arial", 12, "bold"), width=3, bd=2, relief="raised"
+            font=("Arial", 9, "bold"), width=3, bd=2, relief="raised"
         ).pack(side="left", padx=2)
 
         tk.Button(
             controls, text="↷", command=lambda: self._adjust_mesh_view(15, 0),
             bg=BTN_NEUTRAL, fg=BTN_NEUTRAL_FG, activebackground=BTN_PRESSED,
-            font=("Arial", 12, "bold"), width=3, bd=2, relief="raised"
+            font=("Arial", 9, "bold"), width=3, bd=2, relief="raised"
         ).pack(side="left", padx=2)
 
         tk.Button(
             controls, text="↑", command=lambda: self._adjust_mesh_view(0, 10),
             bg=BTN_NEUTRAL, fg=BTN_NEUTRAL_FG, activebackground=BTN_PRESSED,
-            font=("Arial", 12, "bold"), width=3, bd=2, relief="raised"
+            font=("Arial", 9, "bold"), width=3, bd=2, relief="raised"
         ).pack(side="left", padx=2)
 
         tk.Button(
             controls, text="↓", command=lambda: self._adjust_mesh_view(0, -10),
             bg=BTN_NEUTRAL, fg=BTN_NEUTRAL_FG, activebackground=BTN_PRESSED,
-            font=("Arial", 12, "bold"), width=3, bd=2, relief="raised"
+            font=("Arial", 9, "bold"), width=3, bd=2, relief="raised"
         ).pack(side="left", padx=(2, 20))
 
         # Zoom controls
@@ -1434,13 +1439,13 @@ class TouchUI(tk.Tk):
         tk.Button(
             controls, text="+", command=lambda: self._adjust_mesh_zoom(1.2),
             bg=BTN_BLUE, fg=BTN_BLUE_FG, activebackground=BTN_PRESSED,
-            font=("Arial", 13, "bold"), width=3, bd=2, relief="raised"
+            font=("Arial", 9, "bold"), width=3, bd=2, relief="raised"
         ).pack(side="left", padx=2)
 
         tk.Button(
             controls, text="−", command=lambda: self._adjust_mesh_zoom(0.85),
             bg=BTN_BLUE, fg=BTN_BLUE_FG, activebackground=BTN_PRESSED,
-            font=("Arial", 13, "bold"), width=3, bd=2, relief="raised"
+            font=("Arial", 9, "bold"), width=3, bd=2, relief="raised"
         ).pack(side="left", padx=(2, 20))
 
         # View presets
@@ -1450,31 +1455,31 @@ class TouchUI(tk.Tk):
         tk.Button(
             controls, text="Top", command=lambda: self._set_mesh_view(0, 90),
             bg=BTN_GREEN, fg=BTN_GREEN_FG, activebackground=BTN_PRESSED,
-            font=("Arial", 10, "bold"), width=5, bd=2, relief="raised"
+            font=("Arial", 8, "bold"), width=5, bd=2, relief="raised"
         ).pack(side="left", padx=2)
 
         tk.Button(
             controls, text="Front", command=lambda: self._set_mesh_view(0, 0),
             bg=BTN_GREEN, fg=BTN_GREEN_FG, activebackground=BTN_PRESSED,
-            font=("Arial", 10, "bold"), width=5, bd=2, relief="raised"
+            font=("Arial", 8, "bold"), width=5, bd=2, relief="raised"
         ).pack(side="left", padx=2)
 
         tk.Button(
             controls, text="Side", command=lambda: self._set_mesh_view(90, 0),
             bg=BTN_GREEN, fg=BTN_GREEN_FG, activebackground=BTN_PRESSED,
-            font=("Arial", 10, "bold"), width=5, bd=2, relief="raised"
+            font=("Arial", 8, "bold"), width=5, bd=2, relief="raised"
         ).pack(side="left", padx=2)
 
         tk.Button(
             controls, text="Iso", command=lambda: self._set_mesh_view(45, 30),
             bg=BTN_GREEN, fg=BTN_GREEN_FG, activebackground=BTN_PRESSED,
-            font=("Arial", 10, "bold"), width=5, bd=2, relief="raised"
+            font=("Arial", 8, "bold"), width=5, bd=2, relief="raised"
         ).pack(side="left", padx=2)
 
         tk.Button(
             controls, text="Reset", command=self._reset_mesh_view,
             bg=BTN_ORANGE, fg=BTN_ORANGE_FG, activebackground=BTN_PRESSED,
-            font=("Arial", 10, "bold"), width=5, bd=2, relief="raised"
+            font=("Arial", 8, "bold"), width=5, bd=2, relief="raised"
         ).pack(side="left", padx=2)
 
         # Canvas
@@ -1503,11 +1508,11 @@ class TouchUI(tk.Tk):
                     bg=BG, fg="red", font=("Arial", 14)).pack(padx=20, pady=20)
             return
 
-        default_font = ("Arial", 10, "bold")
-        big_font = ("Arial", 12, "bold")
+        default_font = ("Arial", 8, "bold")
+        big_font = ("Arial", 9, "bold")
 
         main = tk.Frame(parent, bg=BG)
-        main.pack(fill="both", expand=True, padx=2, pady=2)
+        main.pack(fill="both", expand=True, padx=0, pady=0)
 
         top = tk.Frame(main, bg=BG)
         top.pack(fill="x", pady=(0, 8))
@@ -1603,12 +1608,12 @@ class TouchUI(tk.Tk):
         self.slats_2d_canvas.draw()
 
         """Unified Slats CAM: Library + Interactive DXF Workspace"""
-        default_font = ("Arial", 10, "bold")
-        big_font = ("Arial", 12, "bold")
+        default_font = ("Arial", 8, "bold")
+        big_font = ("Arial", 9, "bold")
         small_font = ("Arial", 11)
         
         main = tk.Frame(parent, bg=BG)
-        main.pack(fill="both", expand=True, padx=2, pady=2)
+        main.pack(fill="both", expand=True, padx=0, pady=0)
 
         # --- STAGE 1: LOADING (Header Row) ---
         load_frame = tk.Frame(main, bg=PANEL_BG, bd=2, relief="solid")
@@ -1627,14 +1632,14 @@ class TouchUI(tk.Tk):
                   bg=BTN_BLUE, font=small_font).pack(side="left", padx=10)
 
         # --- SLAT LIBRARY (Top Preview) ---
-        lib_label = tk.Label(main, text="SLAT LIBRARY (Blue=XY, Orange=XZ)", bg=BG, fg=FG, font=("Arial", 10, "bold"))
+        lib_label = tk.Label(main, text="SLAT LIBRARY (Blue=XY, Orange=XZ)", bg=BG, fg=FG, font=("Arial", 8, "bold"))
         lib_label.pack(anchor="w")
         
         self.slats_cam_preview_canvas = tk.Canvas(main, bg="#0D0D0D", height=120, highlightthickness=1, highlightbackground=BTN_BLUE)
         self.slats_cam_preview_canvas.pack(fill="x", pady=(0, 10))
 
         # --- MAIN WORKSPACE (DXF + Draggable Slats) ---
-        work_label = tk.Label(main, text="DXF WORKSPACE (Drag slats onto cardboard)", bg=BG, fg=FG, font=("Arial", 10, "bold"))
+        work_label = tk.Label(main, text="DXF WORKSPACE (Drag slats onto cardboard)", bg=BG, fg=FG, font=("Arial", 8, "bold"))
         work_label.pack(anchor="w")
         
         self.slats_cam_dxf_canvas = tk.Canvas(main, bg="#0D0D0D", highlightthickness=2, highlightbackground="#444444")
@@ -1654,17 +1659,17 @@ class TouchUI(tk.Tk):
 
     def _build_slats_cam_tab(self, parent) -> None:
         """Unified Slats CAM: STL → Auto-Pack → DXF Workspace with Interactive Drag"""
-        default_font = ("Arial", 10, "bold")
-        big_font = ("Arial", 12, "bold")
+        default_font = ("Arial", 8, "bold")
+        big_font = ("Arial", 9, "bold")
         small_font = ("Arial", 11)
         
         main = tk.Frame(parent, bg=BG)
-        main.pack(fill="both", expand=True, padx=2, pady=2)
+        main.pack(fill="both", expand=True, padx=0, pady=0)
 
         # --- STAGE 1: LOAD STL & GENERATE ---
         load_frame = tk.LabelFrame(main, text="1. Load STL & Generate Slats", 
                                    bg=PANEL_BG, fg=FG, font=default_font, 
-                                   padx=6, pady=4, bd=2, relief="solid")
+                                   padx=2, pady=1, bd=2, relief="solid")
         load_frame.pack(fill="x", pady=(0, 10))
         
         load_top = tk.Frame(load_frame, bg=PANEL_BG)
@@ -1690,7 +1695,7 @@ class TouchUI(tk.Tk):
         # --- STAGE 2: DXF & PACKING ---
         pack_frame = tk.LabelFrame(main, text="2. Load Cardboard DXF & Auto-Pack", 
                                    bg=PANEL_BG, fg=FG, font=default_font, 
-                                   padx=6, pady=4, bd=2, relief="solid")
+                                   padx=2, pady=1, bd=2, relief="solid")
         pack_frame.pack(fill="x", pady=(0, 10))
         
         pack_top = tk.Frame(pack_frame, bg=PANEL_BG)
@@ -1713,7 +1718,7 @@ class TouchUI(tk.Tk):
         view_ctrl = tk.Frame(main, bg=BG)
         view_ctrl.pack(fill="x", pady=(0, 8))
 
-        tk.Label(view_ctrl, text="Workspace View:", bg=BG, fg=FG, font=("Arial", 10, "bold")).pack(side="left", padx=(0, 10))
+        tk.Label(view_ctrl, text="Workspace View:", bg=BG, fg=FG, font=("Arial", 8, "bold")).pack(side="left", padx=(0, 10))
         tk.Button(view_ctrl, text="−", command=lambda: self._zoom_dxf(-1), 
                   bg=BTN_NEUTRAL, fg=BTN_NEUTRAL_FG, width=3).pack(side="left", padx=1)
         tk.Button(view_ctrl, text="+", command=lambda: self._zoom_dxf(1), 
@@ -2395,15 +2400,15 @@ class TouchUI(tk.Tk):
 
     def _build_diagnostics_tab(self, parent) -> None:
         """Diagnostics"""
-        default_font = ("Arial", 10, "bold")
-        big_font = ("Arial", 12, "bold")
+        default_font = ("Arial", 8, "bold")
+        big_font = ("Arial", 9, "bold")
         mono_font = ("Courier", 12)
 
         main = tk.Frame(parent, bg=BG)
-        main.pack(fill="both", expand=True, padx=2, pady=2)
+        main.pack(fill="both", expand=True, padx=0, pady=0)
 
         info_box = tk.LabelFrame(main, text="Controller Status", bg=PANEL_BG, fg=FG,
-                                 font=default_font, padx=6, pady=4, bd=2, relief="solid")
+                                 font=default_font, padx=2, pady=1, bd=2, relief="solid")
         info_box.pack(fill="x", pady=(0, 8))
 
         tk.Label(info_box, textvariable=self.state_text, bg=PANEL_BG, fg=FG, font=default_font).pack(anchor="w", pady=2)
@@ -2507,6 +2512,7 @@ class TouchUI(tk.Tk):
 
     def _disconnect(self) -> None:
         self._stop_all_motion_and_jobs()
+        self._stop_roller_jog()
         self.polling = False
         self.ctrl.disconnect()
         self.machine_state = "Disconnected"
@@ -2664,10 +2670,18 @@ class TouchUI(tk.Tk):
 
     def _on_jog_press(self, axis_moves: Dict[str, int], btn: tk.Button) -> None:
         btn.config(bg=BTN_PRESSED)
+
+        # Hijack A-axis jog for Pi-side roller control
+        if set(axis_moves.keys()) == {"A"}:
+            forward = axis_moves["A"] > 0
+            self._start_roller_jog(forward=forward)
+            return
+
         self._start_continuous_jog(axis_moves)
 
     def _on_jog_release(self, btn: tk.Button) -> None:
         btn.config(bg=BTN_NEUTRAL)
+        self._stop_roller_jog()
         self._cancel_jog()
 
     def _start_continuous_jog(self, axis_moves: Dict[str, int]) -> None:
@@ -2695,6 +2709,51 @@ class TouchUI(tk.Tk):
 
         self.jog_thread = threading.Thread(target=jog_loop, daemon=True)
         self.jog_thread.start()
+
+    def _start_roller_jog(self, forward: bool) -> None:
+        if self.roller_jogging:
+            return
+
+        self.roller_jogging = True
+
+        def roller_loop() -> None:
+            try:
+                while self.roller_jogging:
+                    settings = self._get_validated_jog_settings({"A": 1})
+
+                    # A step = mm per pulse of jog
+                    distance_mm = settings.step
+
+                    # A feed is stored as mm/min in the UI, convert to mm/s
+                    speed_mm_s = max(settings.feed / 60.0, 0.1)
+
+                    self.rollers.feed_distance(
+                        distance_mm=distance_mm,
+                        speed_mm_s=speed_mm_s,
+                        forward=forward,
+                    )
+
+                    time.sleep(0.02)
+
+            except Exception as exc:
+                self._append_console(f"[ROLLER ERROR] {exc}")
+            finally:
+                try:
+                    self.rollers.stop()
+                except Exception:
+                    pass
+                self.roller_jogging = False
+
+        self.roller_jog_thread = threading.Thread(target=roller_loop, daemon=True)
+        self.roller_jog_thread.start()
+
+
+    def _stop_roller_jog(self) -> None:
+        self.roller_jogging = False
+        try:
+            self.rollers.stop()
+        except Exception:
+            pass
 
     def _apply_jog_values(self) -> None:
         """Force jog loop to re-read and apply new values"""
