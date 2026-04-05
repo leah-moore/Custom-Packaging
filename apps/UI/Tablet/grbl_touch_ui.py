@@ -2755,49 +2755,25 @@ class TouchUI(tk.Tk):
         if not self.rollers:
             self._append_console("[ERROR] RollerController not initialized!")
             return
-        
+
         if self.roller_jogging:
-            self._append_console("[ROLLER] Already jogging, ignoring...")
             return
 
         self.roller_jogging = True
-        direction = 'forward' if forward else 'reverse'
+        direction = "forward" if forward else "reverse"
         self._append_console(f"[ROLLER] ✓ Jog started - {direction}")
-        print(f"[ROLLER] Jog started - {direction}")
 
         def roller_loop() -> None:
             try:
-                start_time = time.time()
-                
-                while self.roller_jogging:
-                    # Get current settings each iteration (user can change speed/step)
-                    settings = self._get_validated_jog_settings({"ROLLER": 1})
-                    
-                    # Feed a small chunk per iteration for smooth continuous motion
-                    distance_mm = settings.step  # mm per iteration
-                    speed_mm_s = max(settings.feed / 60.0, 0.1)
-                    
-                    # Feed this chunk
-                    try:
-                        print(f"[ROLLER] Feeding {distance_mm}mm @ {speed_mm_s:.1f}mm/s")
-                        self.rollers.feed_distance(
-                            distance_mm=distance_mm,
-                            speed_mm_s=speed_mm_s,
-                            forward=forward,
-                        )
-                    except Exception as e:
-                        self._append_console(f"[ROLLER FEED ERROR] {e}")
-                        print(f"[ROLLER FEED ERROR] {e}")
-                        self.roller_jogging = False
-                        break
-                    
-                    # Small sleep to allow button release to be responsive
-                    time.sleep(0.05)
-                
-                # Calculate total distance fed
-                elapsed = time.time() - start_time
-                total_mm = elapsed * (settings.feed / 60.0)  # speed * time
-                self._append_console(f"[ROLLER] Jog stopped - fed ~{total_mm:.1f}mm")
+                settings = self._get_validated_jog_settings({"ROLLER": 1})
+                speed_mm_s = max(settings.feed / 60.0, 0.1)
+
+                # Very large distance so the driver keeps stepping continuously
+                self.rollers.feed_distance(
+                    distance_mm=1000000.0,
+                    speed_mm_s=speed_mm_s,
+                    forward=forward,
+                )
 
             except Exception as exc:
                 self._append_console(f"[ROLLER ERROR] {exc}")
@@ -2807,10 +2783,10 @@ class TouchUI(tk.Tk):
                 except Exception:
                     pass
                 self.roller_jogging = False
+                self._append_console("[ROLLER] Jog stopped")
 
         self.roller_jog_thread = threading.Thread(target=roller_loop, daemon=True)
         self.roller_jog_thread.start()
-
 
     def _stop_roller_jog(self) -> None:
         self.roller_jogging = False
