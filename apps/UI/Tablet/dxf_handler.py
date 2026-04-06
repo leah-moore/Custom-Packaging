@@ -86,7 +86,7 @@ class DXFDieline:
         except Exception as e:
             raise ValueError(f"Failed to parse DXF file with fallback: {e}")
     
-    def _entity_to_geometry(self, entity) -> Optional:
+    def _entity_to_geometry(self, entity) -> Optional: # type: ignore
         """Convert ezdxf entity to Shapely geometry"""
         try:
             if entity.dxftype() == 'LINE':

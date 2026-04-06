@@ -35,6 +35,7 @@ class SimulatedRollerDriver(BaseRollerDriver):
         self._stop_requested = False
         total_time = abs(distance_mm) / speed_mm_s
         start = time.time()
+
         while (time.time() - start) < total_time:
             if self._stop_requested:
                 break
@@ -69,10 +70,12 @@ class PiStepperDriver(BaseRollerDriver):
 
         self._running = False
         self._wave_id = None
+
         self.disable()
 
     def enable(self):
-        self.pi.write(self.enable_pin, 0)  # active low
+        # TMC2209 EN assumed active-low
+        self.pi.write(self.enable_pin, 0)
 
     def disable(self):
         self.pi.write(self.enable_pin, 1)
@@ -105,7 +108,7 @@ class PiStepperDriver(BaseRollerDriver):
             raise ValueError("steps_per_mm must be > 0")
 
         step_rate = self.steps_per_mm * speed_mm_s  # steps/sec
-        half_period_us = int(500000 / step_rate)    # high or low time
+        half_period_us = int(500000 / step_rate)    # one half-cycle
         half_period_us = max(half_period_us, 20)    # sane lower bound
 
         self._clear_wave()
@@ -150,12 +153,12 @@ class PiStepperDriver(BaseRollerDriver):
     def stop(self):
         self._running = False
         self._clear_wave()
-        self.disable()
         print("[PI ROLLERS] stop rollers")
 
     def cleanup(self):
         try:
             self.stop()
+            self.disable()
         finally:
             self.pi.stop()
 
