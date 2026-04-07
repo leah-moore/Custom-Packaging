@@ -4,7 +4,7 @@ Updated for grblHAL 6-Axis: X, Y, Z (See-saw), A (Rollers), B (Crease), C (Knife
 """
 import math
 from typing import List, Dict
-from gcode.machine_ops_types import (
+from apps.gcode.machine_ops_types import (
     Operation, RapidMove, ToolDown, ToolUp, CutPath, 
     FeedAdvance, PivotAction, SetLights, Point
 )
