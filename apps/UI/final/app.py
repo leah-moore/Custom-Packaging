@@ -24,7 +24,7 @@ from pathlib import Path
 from shapely.geometry import Polygon, MultiPolygon, GeometryCollection, box
 from shapely.affinity import translate, rotate as shp_rotate
 
-from gcode.machine_ops_planner import build_machine_ops
+from apps.gcode.machine_ops_planner import build_machine_ops
 from .components.preview_actions_builder import build_preview_actions
 from .components.slats_cam_logic import *
 from .theme import BG, apply_theme, FG, PANEL_BG
