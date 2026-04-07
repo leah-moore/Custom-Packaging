@@ -10,7 +10,9 @@ import sys
 from pathlib import Path
 
 # add /apps to path (you already have something like this)
-sys.path.append(str(Path(__file__).resolve().parents[2]))
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 # 🔥 ADD THIS LINE
 sys.path.append(str(Path(__file__).resolve().parents[2] / "gcode"))
@@ -42,7 +44,11 @@ from .tabs.slats_tab import build_slats_tab
 from .tabs.slats_cam_tab import build_slats_cam_tab
 from .tabs.diagnostics_tab import build_diagnostics_tab
 from .tabs.photogrammetry_tab import build_photogrammetry_tab
-from UI.tablet.dxf_handler import DXFDieline
+try:
+    from apps.UI.tablet.dxf_handler import DXFDieline
+except Exception:
+    from ..tablet.dxf_handler import DXFDieline
+
 try:
     from gantry.pi_teensy_coordination.roller_controller import RollerController
 except Exception:
@@ -2012,7 +2018,7 @@ class TouchUI(tk.Tk):
     # SLATS
     # =========================
     def _use_loaded_mesh_for_slats(self) -> None:
-        if self.photogrammetry_raw_mesh is None:
+        if self.photogrammetry_raw_mesh is None or not self.photogrammetry_mesh_path:
             self.slat_info_text.set("No photogrammetry mesh loaded")
             self._append_console("[SLATS] No photogrammetry mesh loaded")
             return
@@ -2020,13 +2026,7 @@ class TouchUI(tk.Tk):
         self.raw_mesh = self.photogrammetry_raw_mesh
         self.scan_mesh_path = self.photogrammetry_mesh_path
 
-        mesh_name = "mesh"
-        if self.scan_mesh_path:
-            try:
-                mesh_name = os.path.basename(self.scan_mesh_path)
-            except Exception:
-                pass
-
+        mesh_name = os.path.basename(self.scan_mesh_path)
         self.mesh_info_text.set(f"Using mesh for slats: {mesh_name}")
         self.slat_info_text.set("Mesh linked. Ready to generate slats.")
         self._append_console(f"> Linked photogrammetry mesh to Slats tab: {mesh_name}")
@@ -2036,18 +2036,337 @@ class TouchUI(tk.Tk):
         except Exception:
             pass
 
+
+    def _generate_slats(self) -> None:
+        if not self.scan_mesh_path:
+            self.slat_info_text.set("No mesh selected")
+            self._append_console("[SLATS] No mesh selected")
+            return
+
+        try:
+            n_xy = int(float(self.n_xy_var.get()))
+            n_xz = int(float(self.n_xz_var.get()))
+        except Exception:
+            self.slat_info_text.set("Invalid slat counts")
+            self._append_console("[SLATS] Invalid N_xy / N_xz values")
+            return
+
+        if n_xy <= 0 or n_xz <= 0:
+            self.slat_info_text.set("Slat counts must be > 0")
+            self._append_console("[SLATS] Slat counts must be > 0")
+            return
+
+        try:
+            from apps.Filler.grid_slats import compute_worldgrid_from_stl
+
+            self.slats_data = compute_worldgrid_from_stl(
+                self.scan_mesh_path,
+                n_xy=n_xy,
+                n_xz=n_xz,
+            )
+
+            xy_r = len(self.slats_data.get("worldXY_right", []))
+            xy_l = len(self.slats_data.get("worldXY_left", []))
+            xz_r = len(self.slats_data.get("worldXZ_right", []))
+            xz_l = len(self.slats_data.get("worldXZ_left", []))
+
+            self.slat_info_text.set(
+                f"Generated slats | XY R:{xy_r} L:{xy_l} | XZ R:{xz_r} L:{xz_l}"
+            )
+            self._append_console(
+                f"> Generated slats | XY R:{xy_r} L:{xy_l} | XZ R:{xz_r} L:{xz_l}"
+            )
+
+            self._draw_slats_preview()
+
+        except Exception as exc:
+            self.slats_data = None
+            self.slat_info_text.set(f"Slat generation failed: {exc}")
+            self._append_console(f"[SLATS ERROR] {exc}")
+
+
     def _clear_slats(self) -> None:
+        self.slats_data = None
         self.slat_info_text.set("No slats generated")
-        self.slats_info_text.set("No slat grid generated")
-        self._draw_slats_preview()
+        self._append_console("> Cleared slats")
+
+        try:
+            self._draw_slats_preview()
+        except Exception:
+            pass
+
 
     def _draw_slats_preview(self) -> None:
-        if self.slats_ax is None or self.slats_canvas is None:
+        if self.slats_ax is None or self.slats_canvas is None or self.slats_figure is None:
             return
-        self.slats_ax.clear()
-        self.slats_figure.patch.set_facecolor("#111111")
-        self.slats_ax.set_facecolor("#111111")
-        self.slats_ax.set_title("Slats Preview")
+
+        ax = self.slats_ax
+        fig = self.slats_figure
+
+        ax.clear()
+        ax.set_facecolor("#111111")
+        fig.patch.set_facecolor("#111111")
+        fig.subplots_adjust(left=0.00, right=1.00, bottom=0.00, top=1.00)
+
+        all_pts = []
+
+        # --- optional mesh overlay
+        if self.show_mesh_overlay_var.get() and self.raw_mesh is not None:
+            try:
+                import numpy as np
+
+                mesh_points = np.asarray(self.raw_mesh.vertices, dtype=float)
+                if len(mesh_points) > 4000:
+                    idx = np.random.choice(len(mesh_points), 4000, replace=False)
+                    preview_points = mesh_points[idx]
+                else:
+                    preview_points = mesh_points
+
+                ax.scatter(
+                    preview_points[:, 0],
+                    preview_points[:, 1],
+                    preview_points[:, 2],
+                    s=1,
+                    c="#444444",
+                    depthshade=False,
+                )
+                all_pts.append(mesh_points)
+            except Exception as exc:
+                self._append_console(f"[SLATS PREVIEW] Mesh overlay error: {exc}")
+
+        if self.slats_data:
+            try:
+                import numpy as np
+
+                z_levels = self.slats_data.get("zLevels", [])
+                y_levels = self.slats_data.get("yLevels", [])
+
+                worldXY_right = self.slats_data.get("worldXY_right", [])
+                worldXY_left = self.slats_data.get("worldXY_left", [])
+                worldXZ_right = self.slats_data.get("worldXZ_right", [])
+                worldXZ_left = self.slats_data.get("worldXZ_left", [])
+
+                def explode_polys(g):
+                    if g is None or g.is_empty:
+                        return []
+                    t = g.geom_type
+                    if t == "Polygon":
+                        return [g]
+                    if t == "MultiPolygon":
+                        return list(g.geoms)
+                    if t == "GeometryCollection":
+                        out = []
+                        for gg in g.geoms:
+                            out.extend(explode_polys(gg))
+                        return out
+                    return []
+
+                # XY slats live in constant Z planes
+                for z, geom in zip(z_levels, worldXY_right):
+                    if geom is None or geom.is_empty:
+                        continue
+                    for p in explode_polys(geom):
+                        xy = np.asarray(p.exterior.coords)
+                        xyz = np.column_stack([
+                            xy[:, 0],
+                            xy[:, 1],
+                            np.full(len(xy), z),
+                        ])
+                        ax.plot(xyz[:, 0], xyz[:, 1], xyz[:, 2], color="#FF6666", linewidth=1.5)
+                        all_pts.append(xyz)
+
+                for z, geom in zip(z_levels, worldXY_left):
+                    if geom is None or geom.is_empty:
+                        continue
+                    for p in explode_polys(geom):
+                        xy = np.asarray(p.exterior.coords)
+                        xyz = np.column_stack([
+                            xy[:, 0],
+                            xy[:, 1],
+                            np.full(len(xy), z),
+                        ])
+                        ax.plot(xyz[:, 0], xyz[:, 1], xyz[:, 2], color="#FF6666", linewidth=1.5)
+                        all_pts.append(xyz)
+
+                # XZ slats live in constant Y planes
+                for y, geom in zip(y_levels, worldXZ_right):
+                    if geom is None or geom.is_empty:
+                        continue
+                    for p in explode_polys(geom):
+                        xz = np.asarray(p.exterior.coords)
+                        xyz = np.column_stack([
+                            xz[:, 0],
+                            np.full(len(xz), y),
+                            xz[:, 1],
+                        ])
+                        ax.plot(xyz[:, 0], xyz[:, 1], xyz[:, 2], color="#66AAFF", linewidth=1.5)
+                        all_pts.append(xyz)
+
+                for y, geom in zip(y_levels, worldXZ_left):
+                    if geom is None or geom.is_empty:
+                        continue
+                    for p in explode_polys(geom):
+                        xz = np.asarray(p.exterior.coords)
+                        xyz = np.column_stack([
+                            xz[:, 0],
+                            np.full(len(xz), y),
+                            xz[:, 1],
+                        ])
+                        ax.plot(xyz[:, 0], xyz[:, 1], xyz[:, 2], color="#66AAFF", linewidth=1.5)
+                        all_pts.append(xyz)
+
+            except Exception as exc:
+                self._append_console(f"[SLATS PREVIEW] Slat draw error: {exc}")
+
+        # --- fit view nicely
+        try:
+            import numpy as np
+
+            if all_pts:
+                pts = np.vstack(all_pts)
+                xmin, ymin, zmin = pts.min(axis=0)
+                xmax, ymax, zmax = pts.max(axis=0)
+
+                xspan = max(xmax - xmin, 1.0)
+                yspan = max(ymax - ymin, 1.0)
+                zspan = max(zmax - zmin, 1.0)
+
+                cx = (xmin + xmax) / 2.0
+                cy = (ymin + ymax) / 2.0
+                cz = (zmin + zmax) / 2.0
+                max_span = max(xspan, yspan, zspan)
+
+                ax.set_xlim(cx - max_span / 2.0, cx + max_span / 2.0)
+                ax.set_ylim(cy - max_span / 2.0, cy + max_span / 2.0)
+                ax.set_zlim(cz - max_span / 2.0, cz + max_span / 2.0)
+                ax.set_box_aspect([1, 1, 0.7])
+        except Exception:
+            pass
+
+        ax.view_init(elev=20, azim=35)
+        ax.grid(False)
+
+        try:
+            ax.xaxis.pane.fill = False
+            ax.yaxis.pane.fill = False
+            ax.zaxis.pane.fill = False
+            ax.set_axis_off()
+        except Exception:
+            pass
+
+        self.slats_canvas.draw_idle()
+
+    def _draw_slats_preview(self) -> None:
+        if self.slats_ax is None or self.slats_canvas is None or self.slats_figure is None:
+            return
+
+        ax = self.slats_ax
+        fig = self.slats_figure
+
+        ax.clear()
+        ax.set_facecolor("#111111")
+        fig.patch.set_facecolor("#111111")
+        fig.subplots_adjust(left=0.00, right=1.00, bottom=0.00, top=1.00)
+
+        mesh_points = None
+
+        if self.show_mesh_overlay_var.get() and self.raw_mesh is not None:
+            try:
+                import numpy as np
+
+                mesh_points = np.asarray(self.raw_mesh.vertices, dtype=float)
+                if len(mesh_points) > 4000:
+                    idx = np.random.choice(len(mesh_points), 4000, replace=False)
+                    preview_points = mesh_points[idx]
+                else:
+                    preview_points = mesh_points
+
+                ax.scatter(
+                    preview_points[:, 0],
+                    preview_points[:, 1],
+                    preview_points[:, 2],
+                    s=1,
+                    c="#444444",
+                    depthshade=False,
+                )
+            except Exception as exc:
+                self._append_console(f"[SLATS PREVIEW] Mesh overlay error: {exc}")
+
+        if self.slats_data:
+            for slat in self.slats_data:
+                center = slat.get("center")
+                size = slat.get("size")
+
+                if center is None or size is None or len(center) != 3 or len(size) != 3:
+                    continue
+
+                x, y, z = center
+                dx, dy, dz = size
+
+                ax.bar3d(
+                    x - dx / 2.0,
+                    y - dy / 2.0,
+                    z - dz / 2.0,
+                    dx,
+                    dy,
+                    dz,
+                    color="#5FD16F",
+                    alpha=0.65,
+                    shade=True,
+                )
+
+        try:
+            import numpy as np
+
+            pts = []
+
+            if mesh_points is not None and len(mesh_points) > 0:
+                pts.append(mesh_points)
+
+            if self.slats_data:
+                slat_pts = []
+                for slat in self.slats_data:
+                    cx, cy, cz = slat["center"]
+                    dx, dy, dz = slat["size"]
+                    slat_pts.extend([
+                        [cx - dx / 2.0, cy - dy / 2.0, cz - dz / 2.0],
+                        [cx + dx / 2.0, cy + dy / 2.0, cz + dz / 2.0],
+                    ])
+                if slat_pts:
+                    pts.append(np.asarray(slat_pts, dtype=float))
+
+            if pts:
+                pts = np.vstack(pts)
+                xmin, ymin, zmin = pts.min(axis=0)
+                xmax, ymax, zmax = pts.max(axis=0)
+
+                xspan = max(xmax - xmin, 1.0)
+                yspan = max(ymax - ymin, 1.0)
+                zspan = max(zmax - zmin, 1.0)
+
+                cx = (xmin + xmax) / 2.0
+                cy = (ymin + ymax) / 2.0
+                cz = (zmin + zmax) / 2.0
+                max_span = max(xspan, yspan, zspan)
+
+                ax.set_xlim(cx - max_span / 2.0, cx + max_span / 2.0)
+                ax.set_ylim(cy - max_span / 2.0, cy + max_span / 2.0)
+                ax.set_zlim(cz - max_span / 2.0, cz + max_span / 2.0)
+                ax.set_box_aspect([1, 1, 0.7])
+        except Exception:
+            pass
+
+        ax.view_init(elev=20, azim=35)
+        ax.grid(False)
+
+        try:
+            ax.xaxis.pane.fill = False
+            ax.yaxis.pane.fill = False
+            ax.zaxis.pane.fill = False
+            ax.set_axis_off()
+        except Exception:
+            pass
+
         self.slats_canvas.draw_idle()
 
     # =========================
