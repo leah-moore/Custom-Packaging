@@ -6,6 +6,15 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import inspect
 
+import sys
+from pathlib import Path
+
+# add /apps to path (you already have something like this)
+sys.path.append(str(Path(__file__).resolve().parents[2]))
+
+# 🔥 ADD THIS LINE
+sys.path.append(str(Path(__file__).resolve().parents[2] / "gcode"))
+
 
 if __name__ == "__main__" and __package__ is None:
     sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../")))
@@ -16,6 +25,8 @@ from pathlib import Path
 from shapely.geometry import Polygon, MultiPolygon, GeometryCollection, box
 from shapely.affinity import translate, rotate as shp_rotate
 
+from gcode.machine_ops_planner import build_machine_ops
+from .components.preview_actions_builder import build_preview_actions
 from .components.slats_cam_logic import *
 from .theme import BG, apply_theme, FG, PANEL_BG
 from .components.header import build_header
@@ -93,6 +104,8 @@ class TouchUI(tk.Tk):
         # gcode / preview
         self.gcode_lines = []
         self.gcode_segments = []
+
+        self.preview_actions = []
         self.gcode_bounds = {}
         self.current_line_index = 0
         self.current_tool_pos = [0.0, 0.0, 0.0]
@@ -101,6 +114,15 @@ class TouchUI(tk.Tk):
         self.preview_estimated_time = 0.0
         self.preview_animation_id = None
         self.preview_scrub_index = 0.0
+        self.preview_elapsed_s = 0.0
+        self.preview_last_tick_s = None
+        self.preview_total_time_s = 0.0
+
+        self.preview_blade_axis = "B"   # change to "A" if your knife uses A instead
+        self._last_knife_angle = 0.0
+        self.preview_blade_offset_deg = 0.0
+
+        self.preview_live_follow_var = tk.BooleanVar(value=True)
 
         # photogrammetry
         self.photogrammetry_status_var = tk.StringVar(value="Idle")
@@ -191,6 +213,7 @@ class TouchUI(tk.Tk):
         self.mdi_var = tk.StringVar()
         self.spindle_speed_var = tk.StringVar(value="12000")
         self.spindle_oscillation_rpm_var = tk.StringVar(value="2000")
+        self.spindle_status_var = tk.StringVar(value="Spindle: OFF")
 
         # =========================
         # PREVIEW VARS
@@ -484,17 +507,25 @@ class TouchUI(tk.Tk):
         if self.job_running:
             return
         try:
-            speed = int(float(self.spindle_speed_var.get()))
+            raw = self.spindle_speed_var.get().strip()
+            speed = int(float(raw or "12000"))
             if speed <= 0:
                 raise ValueError
         except ValueError:
             messagebox.showerror("Spindle Error", "Enter a spindle speed > 0.")
             return
+
         self._send_line(f"M3 S{speed}")
+
+        if hasattr(self, "spindle_status_var"):
+            self.spindle_status_var.set(f"Spindle: ON ({speed} RPM)")
 
     def _spindle_off(self) -> None:
         if not self.job_running:
             self._send_line(SPINDLE_OFF_CMD)
+
+        if hasattr(self, "spindle_status_var"):
+            self.spindle_status_var.set("Spindle: OFF")
 
     # =========================
     # JOGGING
@@ -566,12 +597,12 @@ class TouchUI(tk.Tk):
         return "$J=G91 " + " ".join(parts) + f" F{abs(feed):.1f}"
 
     def _single_step_jog(self, axis_moves: dict) -> None:
-        if not self._safe_to_jog():
-            return
-
         if set(axis_moves.keys()) == {"ROLLER"}:
             forward = axis_moves["ROLLER"] > 0
             self._roller_step_once(forward=forward)
+            return
+
+        if not self._safe_to_jog():
             return
 
         cmd = self._build_jog_command(axis_moves)
@@ -594,16 +625,16 @@ class TouchUI(tk.Tk):
     def _begin_continuous_jog(self, axis_moves: dict) -> None:
         self._jog_hold_after_id = None
 
+        if set(axis_moves.keys()) == {"ROLLER"}:
+            forward = axis_moves["ROLLER"] > 0
+            self._jog_hold_started = True
+            self._start_roller_jog(forward=forward)
+            return
+
         if not self._safe_to_jog():
             return
 
         self._jog_hold_started = True
-
-        if set(axis_moves.keys()) == {"ROLLER"}:
-            forward = axis_moves["ROLLER"] > 0
-            self._start_roller_jog(forward=forward)
-            return
-
         self._start_continuous_jog(axis_moves)
 
     def _on_jog_release(self, btn: tk.Button) -> None:
@@ -616,14 +647,18 @@ class TouchUI(tk.Tk):
                 pass
             self._jog_hold_after_id = None
 
+        axis_moves = self._pending_jog_axis_moves
+
         if self._jog_hold_started:
-            self._stop_roller_jog()
-            self._cancel_jog()
-            if self.ctrl.is_connected:
-                self.ctrl.send_realtime(b"!")
+            if axis_moves is not None and set(axis_moves.keys()) == {"ROLLER"}:
+                self._stop_roller_jog()
+            else:
+                self._cancel_jog()
+                if self.ctrl.is_connected:
+                    self.ctrl.send_realtime(b"!")
         else:
-            if self._pending_jog_axis_moves is not None:
-                self._single_step_jog(self._pending_jog_axis_moves)
+            if axis_moves is not None:
+                self._single_step_jog(axis_moves)
 
         self._jog_hold_started = False
         self._pending_jog_axis_moves = None
@@ -1078,6 +1113,18 @@ class TouchUI(tk.Tk):
                 self.gcode_viewer.insert("1.0", "\n".join(self.gcode_lines))
 
             self.gcode_segments, self.gcode_bounds = GCodeParser.parse_lines(self.gcode_lines)
+            self.preview_total_time_s = float(self.gcode_bounds.get("total_time_s", 0.0))
+            self.preview_estimated_time = self.preview_total_time_s
+            self.preview_elapsed_s = 0.0
+            self.preview_last_tick_s = None
+            self.preview_scrub_index = 0.0
+            self.preview_scrubber_var.set(0.0)
+
+            total_s = int(self.preview_total_time_s)
+            self.preview_time_var.set(
+                f"Time: 00:00/{total_s // 60:02d}:{total_s % 60:02d}"
+            )
+            self.preview_segment_var.set(f"Segments: 0/{len(self.gcode_segments)}")
             self.job_progress_text.set(f"Job: loaded ({len(self.gcode_lines)} lines)")
             self._append_console(f"> Loaded G-code file: {path}")
 
@@ -1172,7 +1219,7 @@ class TouchUI(tk.Tk):
             return
 
         segments = [
-            ((seg.start[0], seg.start[1]), (seg.end[0], seg.end[1]), seg.motion_type)
+            ((seg.start[0], seg.start[1]), (seg.end[0], seg.end[1]), seg)
             for seg in self.gcode_segments
         ]
         if not segments:
@@ -1206,55 +1253,41 @@ class TouchUI(tk.Tk):
             canvas.create_line(ox - 8, oy, ox + 8, oy, fill="#FFD54A", width=2)
             canvas.create_line(ox, oy - 8, ox, oy + 8, fill="#FFD54A", width=2)
 
-        total = len(segments)
-        exact_pos = self.preview_scrub_index * total
-        current_idx = int(exact_pos)
-        frac = exact_pos - current_idx
+        current_idx, frac = self._get_active_segment_progress()
 
-        current_idx = max(0, min(current_idx, total))
-
-        for i, ((x1, y1), (x2, y2), motion) in enumerate(segments):
+        for i, ((x1, y1), (x2, y2), seg) in enumerate(segments):
+            motion = getattr(seg, "motion_type", "G1")
             base_color = "#6FA8FF" if motion == "G0" else "#5FD16F"
 
             if i < current_idx:
-                # fully completed segment
                 canvas.create_line(
                     tx(x1), ty(y1), tx(x2), ty(y2),
                     fill=base_color, width=2
                 )
-            elif i == current_idx and current_idx < total:
-                # partially completed current segment
+            elif i == current_idx and current_idx < len(segments):
                 px = x1 + (x2 - x1) * frac
                 py = y1 + (y2 - y1) * frac
 
-                # completed part
                 canvas.create_line(
                     tx(x1), ty(y1), tx(px), ty(py),
                     fill="#00FF00", width=3
                 )
-
-                # remaining part
                 canvas.create_line(
                     tx(px), ty(py), tx(x2), ty(y2),
                     fill="#444444", width=1
                 )
 
-                # tool marker
-                r = 4
                 cx, cy = tx(px), ty(py)
-                canvas.create_oval(cx - r, cy - r, cx + r, cy + r,
-                                fill="#00FF00", outline="")
+
+                blade_angle = self._get_blade_angle_from_segment(seg, frac)
+                self._draw_knife_blade_2d(canvas, cx, cy, blade_angle)
+
+                self.current_tool_pos = [px, py, float(seg.start[2] + (seg.end[2] - seg.start[2]) * frac)]
             else:
-                # not yet reached
                 canvas.create_line(
                     tx(x1), ty(y1), tx(x2), ty(y2),
                     fill="#444444", width=1
                 )
-
-        pct = int(self.preview_scrub_index * 100)
-        shown_idx = min(int(exact_pos), total)
-        if hasattr(self, "preview_segment_var"):
-            self.preview_segment_var.set(f"Segments: {shown_idx}/{total} ({pct}%)")
 
     def _draw_gcode_3d_preview(self) -> None:
         if not self.gcode_segments:
@@ -1262,6 +1295,7 @@ class TouchUI(tk.Tk):
                 self.preview_3d_ax.clear()
                 self.preview_3d_ax.set_facecolor("#111111")
                 self.preview_3d_figure.patch.set_facecolor("#111111")
+                self.preview_3d_figure.subplots_adjust(left=0.00, right=1.00, bottom=0.00, top=1.00)
                 self.preview_3d_ax.set_title("No G-code loaded", color="white")
                 self.preview_3d_canvas.draw_idle()
             return
@@ -1274,12 +1308,7 @@ class TouchUI(tk.Tk):
         ax.set_facecolor("#111111")
         self.preview_3d_figure.patch.set_facecolor("#111111")
 
-        total = len(self.gcode_segments)
-        exact_pos = self.preview_scrub_index * total
-        current_idx = int(exact_pos)
-        frac = exact_pos - current_idx
-
-        current_idx = max(0, min(current_idx, total))
+        current_idx, frac = self._get_active_segment_progress()
 
         colors = {
             "G0": "#4EA1FF",
@@ -1297,7 +1326,7 @@ class TouchUI(tk.Tk):
                 abs(seg.start[1] - seg.end[1]) < 0.01 and
                 abs(seg.start[2] - seg.end[2]) > 0.01
             )
-            motion_type = "Z" if is_z_only else seg.motion_type
+            motion_type = "Z" if is_z_only else getattr(seg, "motion_type", "G1")
             color = colors.get(motion_type, "#FFFFFF")
 
             if i < current_idx:
@@ -1311,7 +1340,7 @@ class TouchUI(tk.Tk):
                 )
                 tool_pos = list(seg.end[:3])
 
-            elif i == current_idx and current_idx < total:
+            elif i == current_idx and current_idx < len(self.gcode_segments):
                 px = seg.start[0] + (seg.end[0] - seg.start[0]) * frac
                 py = seg.start[1] + (seg.end[1] - seg.start[1]) * frac
                 pz = seg.start[2] + (seg.end[2] - seg.start[2]) * frac
@@ -1333,8 +1362,27 @@ class TouchUI(tk.Tk):
                     alpha=0.7,
                 )
 
-                tool_pos = [px, py, pz]
+                blade_angle = self._get_blade_angle_from_segment(seg, frac)
+                blade_len = max(
+                    2.0,
+                    0.03 * max(
+                        abs(seg.end[0] - seg.start[0]) + 1.0,
+                        abs(seg.end[1] - seg.start[1]) + 1.0
+                    )
+                )
+                dx = math.cos(blade_angle) * blade_len
+                dy = math.sin(blade_angle) * blade_len
 
+                ax.plot(
+                    [px - dx, px + dx],
+                    [py - dy, py + dy],
+                    [pz, pz],
+                    color="#FF4D4D",
+                    linewidth=3.0,
+                    alpha=1.0,
+                )
+
+                tool_pos = [px, py, pz]
             else:
                 ax.plot(
                     [seg.start[0], seg.end[0]],
@@ -1345,7 +1393,7 @@ class TouchUI(tk.Tk):
                     alpha=0.5,
                 )
 
-        ax.scatter([tool_pos[0]], [tool_pos[1]], [tool_pos[2]], color="#00FF00", s=50)
+        ax.scatter([tool_pos[0]], [tool_pos[1]], [tool_pos[2]], color="#00FF00", s=80, edgecolors="white", linewidths=1)
 
         try:
             import numpy as np
@@ -1362,19 +1410,176 @@ class TouchUI(tk.Tk):
             yspan = max(ymax - ymin, 1.0)
             zspan = max(zmax - zmin, 1.0)
 
-            ax.set_xlim(xmin - 0.05 * xspan, xmax + 0.05 * xspan)
-            ax.set_ylim(ymin - 0.05 * yspan, ymax + 0.05 * yspan)
-            ax.set_zlim(zmin - 0.05 * zspan, zmax + 0.05 * zspan)
-            ax.set_box_aspect([xspan, yspan, zspan])
+            margin = 0.02
+            # --- center + normalize scale ---
+            cx = (xmin + xmax) / 2
+            cy = (ymin + ymax) / 2
+            cz = (zmin + zmax) / 2
+
+            max_span = max(xspan, yspan, zspan)
+
+            ax.set_xlim(cx - max_span/2, cx + max_span/2)
+            ax.set_ylim(cy - max_span/2, cy + max_span/2)
+            ax.set_zlim(cz - max_span/2, cz + max_span/2)
+
+            # flatten Z slightly (looks WAY better for CNC paths)
+            ax.set_box_aspect([1, 1, 0.6])
+
+            # remove all margins
+            ax.margins(0)
+
+            # zoom in hard
+            try:
+                ax.dist = 5
+            except Exception:
+                pass
         except Exception:
             pass
 
-        ax.set_xlabel("X")
-        ax.set_ylabel("Y")
-        ax.set_zlabel("Z")
-        ax.view_init(elev=22, azim=45)
+        ax.view_init(elev=20, azim=-65)
+        ax.grid(False)
 
+        try:
+            ax.xaxis.pane.fill = False
+            ax.yaxis.pane.fill = False
+            ax.zaxis.pane.fill = False
+        except Exception:
+            pass
         self.preview_3d_canvas.draw_idle()
+
+    def _update_preview_from_machine_pos(self) -> None:
+        if not self.gcode_segments:
+            return
+        if not hasattr(self, "preview_live_follow_var"):
+            return
+        if not self.preview_live_follow_var.get():
+            return
+
+        try:
+            mx = float(self.machine_pos_x_text.get())
+            my = float(self.machine_pos_y_text.get())
+            mz = float(self.machine_pos_z_text.get())
+        except Exception:
+            return
+
+        best_idx = 0
+        best_frac = 0.0
+        best_dist2 = float("inf")
+
+        for i, seg in enumerate(self.gcode_segments):
+            x1, y1, z1 = float(seg.start[0]), float(seg.start[1]), float(seg.start[2])
+            x2, y2, z2 = float(seg.end[0]), float(seg.end[1]), float(seg.end[2])
+
+            dx = x2 - x1
+            dy = y2 - y1
+            dz = z2 - z1
+            seg_len2 = dx*dx + dy*dy + dz*dz
+
+            if seg_len2 <= 1e-12:
+                frac = 0.0
+                px, py, pz = x1, y1, z1
+            else:
+                frac = ((mx - x1)*dx + (my - y1)*dy + (mz - z1)*dz) / seg_len2
+                frac = max(0.0, min(1.0, frac))
+                px = x1 + frac * dx
+                py = y1 + frac * dy
+                pz = z1 + frac * dz
+
+            dist2 = (mx - px)**2 + (my - py)**2 + (mz - pz)**2
+
+            if dist2 < best_dist2:
+                best_dist2 = dist2
+                best_idx = i
+                best_frac = frac
+
+        self.current_line_index = best_idx
+
+        seg = self.gcode_segments[best_idx]
+        seg_start = float(getattr(seg, "start_time_s", 0.0))
+        seg_dur = float(getattr(seg, "duration_s", 0.0))
+        self.preview_elapsed_s = seg_start + best_frac * seg_dur
+
+        if self.preview_total_time_s > 0:
+            self.preview_scrub_index = self.preview_elapsed_s / self.preview_total_time_s
+        else:
+            self.preview_scrub_index = best_idx / max(len(self.gcode_segments), 1)
+
+        if hasattr(self, "preview_scrubber_var"):
+            self.preview_scrubber_var.set(self.preview_scrub_index * 100.0)
+
+        self.preview_time_var.set(
+            f"Time: {self._format_mmss(self.preview_elapsed_s)}/{self._format_mmss(self.preview_total_time_s)}"
+        )
+        self.preview_segment_var.set(
+            f"Segments: {best_idx + 1}/{len(self.gcode_segments)}"
+        )
+
+        self._refresh_preview_unified()
+
+
+    def _format_mmss(self, seconds: float) -> str:
+        s = max(0, int(seconds))
+        return f"{s // 60:02d}:{s % 60:02d}"
+
+    def _get_active_segment_progress(self):
+        if not self.gcode_segments:
+            return 0, 0.0
+
+        t = self.preview_elapsed_s
+
+        for i, seg in enumerate(self.gcode_segments):
+            seg_start = getattr(seg, "start_time_s", 0.0)
+            seg_end = getattr(seg, "end_time_s", 0.0)
+            seg_dur = max(getattr(seg, "duration_s", 0.0), 1e-9)
+            is_dwell = getattr(seg, "is_dwell", False)
+
+            if is_dwell:
+                if t <= seg_end:
+                    return i, 1.0
+                continue
+
+            if t <= seg_end:
+                frac = (t - seg_start) / seg_dur if seg_dur > 0 else 1.0
+                frac = max(0.0, min(frac, 1.0))
+                return i, frac
+
+        return len(self.gcode_segments), 1.0
+
+    def _get_blade_angle_from_segment(self, seg, frac: float = 1.0) -> float:
+        axis_index = 4  # B axis = blade
+
+        try:
+            start_rot = float(seg.start[axis_index])
+            end_rot = float(seg.end[axis_index])
+
+            angle_deg = start_rot + (end_rot - start_rot) * frac
+            angle_deg += getattr(self, "preview_blade_offset_deg", 0.0)
+
+            angle_rad = math.radians(angle_deg)
+            self._last_knife_angle = angle_rad
+            return angle_rad
+
+        except Exception:
+            return self._last_knife_angle
+
+    def _draw_knife_blade_2d(self, canvas, x, y, angle_rad, blade_len=18, handle_len=8):
+        tip_x = x + math.cos(angle_rad) * blade_len
+        tip_y = y - math.sin(angle_rad) * blade_len
+
+        tail_x = x - math.cos(angle_rad) * handle_len
+        tail_y = y + math.sin(angle_rad) * handle_len
+
+        canvas.create_line(
+            tail_x, tail_y, tip_x, tip_y,
+            fill="#FF4D4D",
+            width=3
+        )
+
+        r = 3
+        canvas.create_oval(
+            x - r, y - r, x + r, y + r,
+            fill="#FFD54A", outline=""
+        )
 
     def _refresh_preview_unified(self) -> None:
         if self.preview_mode.get() == "2d":
@@ -1386,45 +1591,69 @@ class TouchUI(tk.Tk):
         if not self.gcode_segments:
             messagebox.showwarning("Preview", "Load a G-code file first")
             return
+
         self.preview_is_playing = True
+        self.preview_last_tick_s = time.perf_counter()
+
         if self.preview_play_btn is not None:
             self.preview_play_btn.config(state="disabled")
         if self.preview_pause_btn is not None:
             self.preview_pause_btn.config(state="normal")
+
         self._animate_preview_playback()
 
     def _preview_pause(self) -> None:
         self.preview_is_playing = False
+        self.preview_last_tick_s = None
+
         if self.preview_play_btn is not None:
             self.preview_play_btn.config(state="normal")
         if self.preview_pause_btn is not None:
             self.preview_pause_btn.config(state="disabled")
+
         if self.preview_animation_id is not None:
             self.after_cancel(self.preview_animation_id)
             self.preview_animation_id = None
 
     def _preview_stop(self) -> None:
         self.preview_is_playing = False
-        self.preview_scrubber_var.set(0.0)
+        self.preview_elapsed_s = 0.0
+        self.preview_last_tick_s = None
         self.preview_scrub_index = 0.0
+        self.preview_scrubber_var.set(0.0)
+
         if self.preview_play_btn is not None:
             self.preview_play_btn.config(state="normal")
         if self.preview_pause_btn is not None:
             self.preview_pause_btn.config(state="disabled")
+
         if self.preview_animation_id is not None:
             self.after_cancel(self.preview_animation_id)
             self.preview_animation_id = None
+
         self._preview_scrubber_moved("0")
 
     def _preview_step_frame(self) -> None:
         if not self.gcode_segments:
             return
-        segments_count = len(self.gcode_segments)
-        current_idx = int(self.preview_scrub_index * segments_count)
-        current_idx = min(current_idx + 1, segments_count)
-        self.preview_scrub_index = current_idx / max(segments_count, 1)
-        self.preview_scrubber_var.set(self.preview_scrub_index * 100)
-        self._preview_scrubber_moved(str(self.preview_scrub_index * 100))
+
+        current_idx = self.current_line_index
+        next_idx = min(current_idx + 1, len(self.gcode_segments))
+
+        if next_idx <= 0:
+            self.preview_elapsed_s = 0.0
+        elif next_idx >= len(self.gcode_segments):
+            self.preview_elapsed_s = self.preview_total_time_s
+        else:
+            self.preview_elapsed_s = float(getattr(self.gcode_segments[next_idx], "start_time_s", 0.0))
+
+        if self.preview_total_time_s > 0:
+            self.preview_scrub_index = self.preview_elapsed_s / self.preview_total_time_s
+        else:
+            self.preview_scrub_index = next_idx / max(len(self.gcode_segments), 1)
+
+        self.preview_scrubber_var.set(self.preview_scrub_index * 100.0)
+        self._preview_scrubber_moved(str(self.preview_scrub_index * 100.0))
 
     def _update_preview_speed(self) -> None:
         speed_str = self.preview_speed_var.get().replace("x", "")
@@ -1437,38 +1666,76 @@ class TouchUI(tk.Tk):
         if not self.preview_is_playing or not self.gcode_segments:
             return
 
-        segments_count = len(self.gcode_segments)
-        increment = (self.preview_playback_speed / max(segments_count, 1)) * 0.05
-        new_pos = self.preview_scrub_index + increment
+        now = time.perf_counter()
+        if self.preview_last_tick_s is None:
+            self.preview_last_tick_s = now
 
-        if new_pos >= 1.0:
-            new_pos = 1.0
+        dt = now - self.preview_last_tick_s
+
+        seg_idx = min(self.current_line_index, len(self.gcode_segments) - 1)
+        seg = self.gcode_segments[seg_idx]
+
+        feed = getattr(seg, "feed_rate", 1000.0) / 1000.0  # normalize
+
+        self.preview_elapsed_s += dt * self.preview_playback_speed * feed
+
+        self.preview_elapsed_s += dt * self.preview_playback_speed
+
+        if self.preview_total_time_s <= 0:
+            self.preview_elapsed_s = 0.0
+            self.preview_scrub_index = 1.0
             self.preview_is_playing = False
+        else:
+            if self.preview_elapsed_s >= self.preview_total_time_s:
+                self.preview_elapsed_s = self.preview_total_time_s
+                self.preview_is_playing = False
+
+            self.preview_scrub_index = self.preview_elapsed_s / self.preview_total_time_s
+
+        self.preview_scrubber_var.set(self.preview_scrub_index * 100.0)
+        self._preview_scrubber_moved(str(self.preview_scrub_index * 100.0))
+
+        if not self.preview_is_playing:
             if self.preview_play_btn is not None:
                 self.preview_play_btn.config(state="normal")
             if self.preview_pause_btn is not None:
                 self.preview_pause_btn.config(state="disabled")
+            self.preview_animation_id = None
+            return
 
-        self.preview_scrub_index = new_pos
-        self.preview_scrubber_var.set(self.preview_scrub_index * 100)
-        self._preview_scrubber_moved(str(self.preview_scrub_index * 100))
-
-        if self.preview_is_playing:
-            self.preview_animation_id = self.after(16, self._animate_preview_playback)
+        self.preview_animation_id = self.after(16, self._animate_preview_playback)
 
     def _preview_scrubber_moved(self, val) -> None:
         try:
             scrub_val = float(val)
-            self.preview_scrub_index = scrub_val / 100.0
+            self.preview_scrub_index = max(0.0, min(scrub_val / 100.0, 1.0))
         except Exception:
             return
 
-        if self.gcode_segments:
-            self.current_line_index = int(self.preview_scrub_index * len(self.gcode_segments))
-            current_seg = self.current_line_index
-            total_segs = len(self.gcode_segments)
-            pct = int(self.preview_scrub_index * 100)
-            self.preview_segment_var.set(f"Segments: {current_seg}/{total_segs} ({pct}%)")
+        if not self.gcode_segments:
+            self.current_line_index = 0
+            self.preview_segment_var.set("Segments: 0/0")
+            self.preview_time_var.set("Time: --:--")
+            self._refresh_preview_unified()
+            return
+
+        self.preview_elapsed_s = self.preview_scrub_index * max(self.preview_total_time_s, 0.0)
+
+        idx = len(self.gcode_segments)
+        for i, seg in enumerate(self.gcode_segments):
+            seg_end = float(getattr(seg, "end_time_s", 0.0))
+            if self.preview_elapsed_s <= seg_end:
+                idx = i
+                break
+
+        self.current_line_index = min(idx, len(self.gcode_segments))
+
+        self.preview_time_var.set(
+            f"Time: {self._format_mmss(self.preview_elapsed_s)}/{self._format_mmss(self.preview_total_time_s)}"
+        )
+        self.preview_segment_var.set(
+            f"Segments: {min(self.current_line_index, len(self.gcode_segments))}/{len(self.gcode_segments)}"
+        )
 
         self._refresh_preview_unified()
 
@@ -2919,6 +3186,8 @@ class TouchUI(tk.Tk):
                     self.machine_pos_b_text.set(coords[4])
                 if len(coords) > 5:
                     self.machine_pos_c_text.set(coords[5])
+                
+                self._update_preview_from_machine_pos()
 
             elif key == "WPos":
                 self.work_pos_text.set(f"WPos: {val}")

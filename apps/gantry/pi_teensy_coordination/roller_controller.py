@@ -36,6 +36,9 @@ class SimulatedRollerDriver(BaseRollerDriver):
         total_time = abs(distance_mm) / speed_mm_s
         start = time.time()
 
+        direction = "forward" if forward else "reverse"
+        print(f"[SIM ROLLERS] feed {distance_mm:.3f} mm @ {speed_mm_s:.3f} mm/s ({direction})")
+
         while (time.time() - start) < total_time:
             if self._stop_requested:
                 break
@@ -137,18 +140,48 @@ class PiStepperDriver(BaseRollerDriver):
         self._start_wave(speed_mm_s=speed_mm_s, forward=forward)
 
     def feed_distance(self, distance_mm, speed_mm_s=DEFAULT_ROLLER_SPEED_MM_S, forward=True):
-        steps = int(abs(distance_mm) * self.steps_per_mm)
+        if speed_mm_s <= 0:
+            raise ValueError("speed_mm_s must be > 0")
+        if self.steps_per_mm <= 0:
+            raise ValueError("steps_per_mm must be > 0")
+
+        steps = int(round(abs(distance_mm) * self.steps_per_mm))
         if steps == 0:
             return
 
-        self._start_wave(speed_mm_s=speed_mm_s, forward=forward)
+        step_rate = self.steps_per_mm * speed_mm_s
+        half_period_us = int(500000 / step_rate)
+        half_period_us = max(half_period_us, 20)
+
+        self._clear_wave()
+        self.enable()
+        self.set_direction(forward)
+
+        pulses = []
+        for _ in range(steps):
+            pulses.append(self.pigpio.pulse(1 << self.step_pin, 0, half_period_us))
+            pulses.append(self.pigpio.pulse(0, 1 << self.step_pin, half_period_us))
+
+        self.pi.wave_add_generic(pulses)
+        wave_id = self.pi.wave_create()
+        if wave_id < 0:
+            raise RuntimeError("Failed to create pigpio wave")
+
+        direction = "forward" if forward else "reverse"
+        print(
+            f"[PI ROLLERS] feed {distance_mm:.3f} mm ({steps} steps) "
+            f"@ {speed_mm_s:.3f} mm/s ({direction})"
+        )
 
         try:
-            step_rate = self.steps_per_mm * speed_mm_s
-            duration_s = steps / step_rate
-            time.sleep(duration_s)
+            self.pi.wave_send_once(wave_id)
+            while self.pi.wave_tx_busy():
+                time.sleep(0.001)
         finally:
-            self.stop()
+            try:
+                self.pi.wave_delete(wave_id)
+            except Exception:
+                pass
 
     def stop(self):
         self._running = False

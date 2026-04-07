@@ -148,6 +148,21 @@ def build_preview_tab(app, parent) -> None:
     speed_combo.current(3)
     speed_combo.bind("<<ComboboxSelected>>", lambda e: app._update_preview_speed())
 
+    app.preview_live_follow_var = tk.BooleanVar(value=True)
+
+    tk.Checkbutton(
+        top,
+        text="Live Follow",
+        variable=app.preview_live_follow_var,
+        bg=PANEL_BG,
+        fg=FG,
+        activebackground=PANEL_BG,
+        activeforeground=FG,
+        selectcolor=BTN_BLUE,
+        font=("Arial", 9, "bold"),
+    ).pack(side="right", padx=10)
+
+
     # Right: Info display
     info_frame = tk.Frame(top, bg=PANEL_BG)
     info_frame.pack(side="right", padx=10, pady=6, fill="x", expand=True)
@@ -181,7 +196,8 @@ def build_preview_tab(app, parent) -> None:
         highlightthickness=0,
     )
 
-    app.preview_3d_figure = Figure(figsize=(14, 10), dpi=100)
+    app.preview_3d_figure = Figure(figsize=(18, 12), dpi=100)
+    app.preview_3d_figure.subplots_adjust(left=0.01, right=0.99, bottom=0.02, top=0.98)
     app.preview_3d_ax = app.preview_3d_figure.add_subplot(111, projection="3d")
     app.preview_3d_figure.patch.set_facecolor("#111111")
     app.preview_3d_ax.set_facecolor("#111111")

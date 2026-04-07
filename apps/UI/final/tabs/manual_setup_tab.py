@@ -82,12 +82,13 @@ def build_manual_setup_tab(app, parent) -> None:
                 activeforeground=FG,
             ).pack(side="left", padx=4)
 
-    make_radio_row(settings_box, 0, "Feed Distance (mm)", app.jog_step_var, ["0.1", "1", "10", "20"])
-    make_radio_row(settings_box, 2, "Feed Rate (mm/min)", app.jog_feed_var, ["100", "500", "1000", "2000"])
-    make_radio_row(settings_box, 4, "Feed Angle (deg)", app.a_rot_step_var, ["1", "5", "10", "45"])
-    make_radio_row(settings_box, 6, "Roller Step (mm)", app.roller_step_var, ["0.5", "1", "5", "10"])
-    make_radio_row(settings_box, 8, "Roller Feed (mm/min)", app.roller_feed_var, ["100", "300", "600", "1200"])
-    make_radio_row(settings_box, 10, "Spindle Oscillation (RPM)", app.spindle_oscillation_rpm_var, ["1000", "2000", "3000", "4000"])
+    make_radio_row(settings_box, 0, "Jog Step (mm)", app.jog_step_var, ["0.1", "1", "10", "20"])
+    make_radio_row(settings_box, 2, "Jog Feed (mm/min)", app.jog_feed_var, ["100", "500", "1000", "2000"])
+    make_radio_row(settings_box, 4, "B Step (deg)", app.b_rot_step_var, ["1", "5", "10", "45"])
+    make_radio_row(settings_box, 6, "C Step (deg)", app.c_rot_step_var, ["1", "5", "10", "45"])
+    make_radio_row(settings_box, 8, "Roller Step (mm)", app.roller_step_var, ["0.5", "1", "5", "10"])
+    make_radio_row(settings_box, 10, "Roller Feed (mm/min)", app.roller_feed_var, ["100", "300", "600", "1200"])
+    #make_radio_row(settings_box, 12, "Spindle Oscillation (RPM)", app.spindle_oscillation_rpm_var, ["1000", "2000", "3000", "4000"])
 
     # =====================================================
     # LEFT: MACHINE CONTROL
@@ -226,6 +227,15 @@ def build_manual_setup_tab(app, parent) -> None:
 
     tk.Label(
         hint_row,
+        text="Roller is Pi-controlled and does not change GRBL axis position",
+        bg=BG,
+        fg="#888888",
+        font=("Arial", 7, "bold"),
+        anchor="w",
+    ).pack(side="right")
+    
+    tk.Label(
+        hint_row,
         text="Tap = selected step   •   Hold = continuous jog",
         bg=BG,
         fg="#BBBBBB",
@@ -291,6 +301,31 @@ def build_manual_setup_tab(app, parent) -> None:
     # SPACER ROW (this is the key)
     outputs_box.grid_rowconfigure(1, minsize=10)
 
+    tk.Label(
+        outputs_box,
+        text="Spindle Speed (RPM)",
+        bg=PANEL_BG,
+        fg=FG,
+        font=default_font,
+    ).grid(row=2, column=0, columnspan=2, padx=4, pady=(4, 1), sticky="w")
+
+    speed_row = tk.Frame(outputs_box, bg=PANEL_BG)
+    speed_row.grid(row=3, column=0, columnspan=2, padx=4, pady=(0, 4), sticky="w")
+
+    for rpm in ["6000", "9000", "12000", "18000"]:
+        tk.Radiobutton(
+            speed_row,
+            text=rpm,
+            variable=app.spindle_speed_var,
+            value=rpm,
+            bg=PANEL_BG,
+            fg=FG,
+            selectcolor=BTN_BLUE,
+            font=default_font,
+            activebackground=PANEL_BG,
+            activeforeground=FG,
+        ).pack(side="left", padx=4)
+
 
     # SPINDLE ROW
     tk.Button(
@@ -305,7 +340,7 @@ def build_manual_setup_tab(app, parent) -> None:
         bd=2,
         relief="raised",
         pady=2,
-    ).grid(row=2, column=0, padx=4, pady=(2, 4), sticky="ew")
+    ).grid(row=4, column=0, padx=4, pady=(2, 4), sticky="ew")
 
     tk.Button(
         outputs_box,
@@ -319,7 +354,15 @@ def build_manual_setup_tab(app, parent) -> None:
         bd=2,
         relief="raised",
         pady=2,
-    ).grid(row=2, column=1, padx=4, pady=(2, 4), sticky="ew")
+    ).grid(row=4, column=1, padx=4, pady=(2, 4), sticky="ew")
+
+    tk.Label(
+        outputs_box,
+        textvariable=app.spindle_status_var,
+        bg=PANEL_BG,
+        fg="#AAAAAA",
+        font=default_font,
+    ).grid(row=5, column=0, columnspan=2, padx=4, pady=(2, 4), sticky="w")
 
     # Position & Zero
     pos_zero_box = tk.LabelFrame(
@@ -391,42 +434,82 @@ def build_manual_setup_tab(app, parent) -> None:
 
     tk.Label(
         right_col,
-        text="Set Zero",
+        text="Set Work Zero",
         bg=PANEL_BG,
         fg="#FFD54A",
         font=panel_font,
     ).pack(anchor="w", pady=(0, 4))
 
+    # --- Set Work Zero label (keep as-is above this) ---
+
     zero_frame = tk.Frame(right_col, bg=PANEL_BG)
     zero_frame.pack(fill="x")
 
-    zero_buttons = [
-        ("Zero X", "G10 L20 P1 X0"),
-        ("Zero Y", "G10 L20 P1 Y0"),
-        ("Zero Z", "G10 L20 P1 Z0"),
-        ("Zero B", "G10 L20 P1 B0"),
-        ("Zero C", "G10 L20 P1 C0"),
-    ]
-
-    for row, (label, cmd) in enumerate(zero_buttons):
-        col = row % 2
-        actual_row = row // 2
-        tk.Button(
-            zero_frame,
-            text=label,
-            command=lambda c=cmd: app._send_line(c),
-            bg=BTN_NEUTRAL,
-            fg=BTN_NEUTRAL_FG,
-            activebackground=BTN_PRESSED,
-            activeforeground="#000000",
-            font=default_font,
-            bd=2,
-            relief="raised",
-            pady=1,
-        ).grid(row=actual_row, column=col, padx=2, pady=2, sticky="ew")
-
+    # Configure 2 columns
     zero_frame.grid_columnconfigure(0, weight=1)
     zero_frame.grid_columnconfigure(1, weight=1)
+
+    # LEFT COLUMN (X Y Z)
+    tk.Button(
+        zero_frame,
+        text="Set X Work 0",
+        command=lambda: app._send_line("G10 L20 P1 X0"),
+        bg=BTN_NEUTRAL, fg=BTN_NEUTRAL_FG,
+        activebackground=BTN_PRESSED, activeforeground="#000000",
+        font=default_font, bd=2, relief="raised",
+    ).grid(row=0, column=0, padx=2, pady=2, sticky="ew")
+
+    tk.Button(
+        zero_frame,
+        text="Set Y Work 0",
+        command=lambda: app._send_line("G10 L20 P1 Y0"),
+        bg=BTN_NEUTRAL, fg=BTN_NEUTRAL_FG,
+        activebackground=BTN_PRESSED, activeforeground="#000000",
+        font=default_font, bd=2, relief="raised",
+    ).grid(row=1, column=0, padx=2, pady=2, sticky="ew")
+
+    tk.Button(
+        zero_frame,
+        text="Set Z Work 0",
+        command=lambda: app._send_line("G10 L20 P1 Z0"),
+        bg=BTN_NEUTRAL, fg=BTN_NEUTRAL_FG,
+        activebackground=BTN_PRESSED, activeforeground="#000000",
+        font=default_font, bd=2, relief="raised",
+    ).grid(row=2, column=0, padx=2, pady=2, sticky="ew")
+
+    # RIGHT COLUMN (B C)
+    tk.Button(
+        zero_frame,
+        text="Set B Work 0",
+        command=lambda: app._send_line("G10 L20 P1 B0"),
+        bg=BTN_NEUTRAL, fg=BTN_NEUTRAL_FG,
+        activebackground=BTN_PRESSED, activeforeground="#000000",
+        font=default_font, bd=2, relief="raised",
+    ).grid(row=0, column=1, padx=2, pady=2, sticky="ew")
+
+    tk.Button(
+        zero_frame,
+        text="Set C Work 0",
+        command=lambda: app._send_line("G10 L20 P1 C0"),
+        bg=BTN_NEUTRAL, fg=BTN_NEUTRAL_FG,
+        activebackground=BTN_PRESSED, activeforeground="#000000",
+        font=default_font, bd=2, relief="raised",
+    ).grid(row=1, column=1, padx=2, pady=2, sticky="ew")
+
+    # (optional spacer to balance height)
+    zero_frame.grid_rowconfigure(2, minsize=1)
+
+    # FULL WIDTH BUTTON
+    tk.Button(
+        zero_frame,
+        text="Set All Work 0",
+        command=lambda: app._send_line("G10 L20 P1 X0 Y0 Z0 B0 C0"),
+        bg=BTN_YELLOW, fg=BTN_YELLOW_FG,
+        activebackground=BTN_PRESSED, activeforeground="#000000",
+        font=default_font, bd=2, relief="raised",
+        pady=2,
+    ).grid(row=3, column=0, columnspan=2, padx=2, pady=(6, 2), sticky="ew")
+
 
     # =====================================================
     # RIGHT: HOME AXIS

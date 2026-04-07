@@ -46,7 +46,7 @@ else:
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
 # ---------------- USER SETTINGS ----------------
-INPUT_STL = Path("data/stl/input/Photogrammetry/dawg.obj")  # change if needed
+INPUT_STL = Path("data/stl/input/Asymmetrical/mouse.stl")  # change if needed
 
 # ---------------- SYMMETRY MODE ----------------
 # Options:
@@ -85,10 +85,10 @@ sidePadX    = margin
 
 MIN_SLAT_OVERHANG = 5.0  # mm — minimum material past silhouette
 
-MIN_CARDBOARD_WIDTH = 1.0  # mm; raise if spikes remain, lower if you lose detail
+MIN_CARDBOARD_WIDTH = 2.0  # mm; raise if spikes remain, lower if you lose detail
 
 # silhouette robustness
-SNAP        = 1e-3     # snap rounding
+SNAP        = 1e-4     # snap rounding (finer rounding for smoother curves)
 DUST_AREA   = 5.0      # drop tiny fragments
 
 # NOTE: FORCE_SOLID/RM_HOLES are kept for compatibility with your toggles,
@@ -97,7 +97,7 @@ FORCE_SOLID = False
 RM_HOLES    = False
 
 # envelope silhouette sampling density (higher = smoother, slower)
-ENVELOPE_SAMPLES = 700
+ENVELOPE_SAMPLES = 1200
 
 # plotting
 MESH_ALPHA  = 0.18
@@ -108,13 +108,23 @@ CONTOUR_EPS = 0.05
 CUT_BOTH_SIDES = True   # or False
 
 # ================================================
-# SMOOTHING CONTROLS
+# SMOOTHING & FEATURE SIZE CONTROLS
 # ================================================
-# Try these to avoid spiky bands that intersect the mesh:
-SIMPLIFY_TOLERANCE = 0.5       # Douglas-Peucker (0.5-1.0 mm typical)
-USE_MORPH_SMOOTH = False       # if True, apply dilate→erode smoothing
-MORPH_EXPAND = 0.3             # expand amount (mm)
-MORPH_SHRINK = 0.3             # shrink amount (mm)
+# Blade detail tolerance: removes micro-features smaller than this
+MIN_FEATURE_SIZE = 3         # mm — collapse blade steps/notches smaller than this
+#                                # Increase to remove tiny details (1.5-3.0 mm typical)
+#                                # Decrease to keep fine geometry (0.5-1.0 mm)
+
+# Simplify contour curves: removes vertices that don't deviate much from a line
+SIMPLIFY_TOLERANCE = 0.75       # Douglas-Peucker tolerance (mm)
+#                                # 0.1-0.3 = smooth curves, keeps detail
+#                                # 0.5-0.75 = aggressive smoothing, removes micro-zigzags
+#                                # 1.0+ = very simplified, blocky look
+
+# Morphological smoothing: dilate→erode to round sharp corners
+USE_MORPH_SMOOTH = True        # if True, apply dilate→erode smoothing
+MORPH_EXPAND = 1             # expand amount (mm) — increase for rounder curves
+MORPH_SHRINK = 1             # shrink amount (mm) — keep equal to MORPH_EXPAND
 # ================================================
 
 @dataclass
@@ -200,6 +210,48 @@ def bridge_short_dips(a2, x, min_depth_mm):
     x2[mask] = baseline[mask]
 
     return x2
+
+
+def filter_micro_features(geom, min_feature_mm):
+    """
+    Remove small notches and indentations from a geometry.
+    
+    For each vertex, if the inward dent depth is smaller than min_feature_mm,
+    snap it back to the outer envelope.
+    
+    Args:
+        geom: Shapely Polygon or MultiPolygon
+        min_feature_mm: minimum inward feature depth (mm) to preserve
+    
+    Returns:
+        Simplified geometry with micro-features removed
+    """
+    if geom is None or geom.is_empty or min_feature_mm <= 0:
+        return geom
+    
+    if not hasattr(geom, 'exterior'):
+        # MultiPolygon or other; process recursively
+        if hasattr(geom, 'geoms'):
+            polys = [filter_micro_features(g, min_feature_mm) for g in geom.geoms]
+            polys = [p for p in polys if p is not None and not p.is_empty]
+            if not polys:
+                return None
+            if len(polys) == 1:
+                return polys[0]
+            return MultiPolygon(polys)
+        return geom
+    
+    try:
+        # Buffer slightly inward then outward to collapse small notches
+        # This is more robust than manual coordinate filtering
+        buffer_amt = min_feature_mm / 1000.0
+        buffered = geom.buffer(-buffer_amt, resolution=4)
+        buffered = buffered.buffer(buffer_amt, resolution=4)
+        
+        result = safe_geom(buffered)
+        return result if result is not None else geom
+    except Exception:
+        return geom
 
 
 def explode_polys(g):
@@ -467,6 +519,7 @@ def outer_silhouette_2d(
     use_morph_smooth=False,
     morph_expand=0.3,
     morph_shrink=0.3,
+    min_feature_size=0.0,
 ):
     """
     OUTER-ENVELOPE silhouette (ignores interior walls):
@@ -476,6 +529,7 @@ def outer_silhouette_2d(
       simplify_tolerance: Douglas-Peucker simplification tolerance (0.5–1.0 mm typical)
       use_morph_smooth: if True, apply dilate→erode smoothing
       morph_expand, morph_shrink: morphological smoothing amounts
+      min_feature_size: collapse blade notches/steps smaller than this (mm)
     """
     polylines = section_polylines(mesh, origin, normal)
     if not polylines:
@@ -501,6 +555,12 @@ def outer_silhouette_2d(
     U = safe_geom(U.simplify(tolerance=simplify_tolerance, preserve_topology=True))
     if U is None or U.is_empty:
         return None
+
+    # 🔑 OPTIONAL: filter micro-features (collapse notches smaller than min_feature_size)
+    if min_feature_size > 0:
+        U = filter_micro_features(U, min_feature_size)
+        if U is None or U.is_empty:
+            return None
 
     # 🔑 OPTIONAL: morphological smoothing (dilate→erode)
     if use_morph_smooth:
@@ -921,6 +981,7 @@ def compute_worldgrid_from_stl(stl_path, n_xy=None, n_xz=None):
                 use_morph_smooth=USE_MORPH_SMOOTH,
                 morph_expand=MORPH_EXPAND,
                 morph_shrink=MORPH_SHRINK,
+                min_feature_size=MIN_FEATURE_SIZE,
             )
         )
 
@@ -942,6 +1003,7 @@ def compute_worldgrid_from_stl(stl_path, n_xy=None, n_xz=None):
                 use_morph_smooth=USE_MORPH_SMOOTH,
                 morph_expand=MORPH_EXPAND,
                 morph_shrink=MORPH_SHRINK,
+                min_feature_size=MIN_FEATURE_SIZE,
             )
         )
 
@@ -967,6 +1029,7 @@ def compute_worldgrid_from_stl(stl_path, n_xy=None, n_xz=None):
                 use_morph_smooth=USE_MORPH_SMOOTH,
                 morph_expand=MORPH_EXPAND,
                 morph_shrink=MORPH_SHRINK,
+                min_feature_size=MIN_FEATURE_SIZE,
             )
         )
 
@@ -988,6 +1051,7 @@ def compute_worldgrid_from_stl(stl_path, n_xy=None, n_xz=None):
                 use_morph_smooth=USE_MORPH_SMOOTH,
                 morph_expand=MORPH_EXPAND,
                 morph_shrink=MORPH_SHRINK,
+                min_feature_size=MIN_FEATURE_SIZE,
             )
         )
 
