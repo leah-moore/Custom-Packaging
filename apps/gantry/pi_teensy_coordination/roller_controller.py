@@ -97,7 +97,7 @@ class LGPIOStepperDriver(BaseRollerDriver):
         self.lgpio.gpio_write(self.h, self.enable_pin, 1)
 
     def set_direction(self, forward=True):
-        self.lgpio.gpio_write(self.h, self.dir_pin, 1 if forward else 0)
+        self.lgpio.gpio_write(self.h, self.dir_pin, 0 if forward else 1)
 
     def _step_once(self, half_delay_s: float):
         self.lgpio.gpio_write(self.h, self.step_pin, 1)

@@ -25,9 +25,11 @@ from shapely.geometry import Polygon, MultiPolygon, GeometryCollection, box
 from shapely.affinity import translate, rotate as shp_rotate
 
 from apps.gcode.machine_ops_planner import build_machine_ops
+from apps.gantry.pi_teensy_coordination.job_runner import JobRunner
+
 from .components.preview_actions_builder import build_preview_actions
 from .components.slats_cam_logic import *
-from .theme import BG, apply_theme, FG, PANEL_BG
+from .theme import BG, apply_theme, FG, PANEL_BG, BTN_NEUTRAL
 from .components.header import build_header
 from .machine_controller import GrblHALController
 from .gcode_parser import GCodeParser
@@ -110,6 +112,7 @@ class TouchUI(tk.Tk):
         self.job_paused = False
         self.job_stopping = False
         self.job_thread = None
+        self.jog_mode_var = tk.StringVar(value="step")
 
         # tap-vs-hold jog state
         self._jog_hold_after_id = None
@@ -227,7 +230,7 @@ class TouchUI(tk.Tk):
         # RUN / CONSOLE VARS
         # =========================
         self.mdi_var = tk.StringVar()
-        self.spindle_speed_var = tk.StringVar(value="12000")
+        self.spindle_speed_var = tk.StringVar(value="4000")
         self.spindle_oscillation_rpm_var = tk.StringVar(value="2000")
         self.spindle_status_var = tk.StringVar(value="Spindle: OFF")
 
@@ -302,41 +305,41 @@ class TouchUI(tk.Tk):
         except Exception:
             pass
 
-        style.configure("TNotebook", background=BG, borderwidth=0)
+        # Notebook background (bar behind tabs)
+        style.configure(
+            "TNotebook",
+            background=BG,
+            borderwidth=0,
+        )
 
+        # Base tab style
         style.configure(
             "TNotebook.Tab",
-            padding=(4, 1),  # 🔥 THIS is key (your version was too tall)
+            background="#2A2A2A",   # inactive tabs
+            foreground="#BBBBBB",
+            padding=(10, 4),
             font=("Arial", 8, "bold"),
+            borderwidth=0,
         )
 
+        # Selected + hover behavior
         style.map(
             "TNotebook.Tab",
             background=[
-                ("selected", PANEL_BG),
-                ("!selected", "#D9D9D9"),
+                ("selected", PANEL_BG),   # <-- MATCHES YOUR PANELS (key change)
+                ("active", "#353535"),
             ],
             foreground=[
-                ("selected", FG),
-                ("!selected", "#111111"),
+                ("selected", "#FFFFFF"),
+                ("active", "#FFFFFF"),
             ],
         )
 
-        style.map(
-            "TNotebook.Tab",
-            background=[
-                ("selected", PANEL_BG),
-                ("active", "#CFCFCF"),
-                ("!selected", "#D9D9D9"),
-            ],
-            foreground=[
-                ("selected", FG),
-                ("active", "#111111"),
-                ("!selected", "#111111"),
-            ],
-        )
         # notebook
-        self.notebook = ttk.Notebook(self)
+        notebook_container = tk.Frame(self, bg=BG)
+        notebook_container.pack(fill="both", expand=True)
+
+        self.notebook = ttk.Notebook(notebook_container)
         self.notebook.pack(fill="both", expand=True)
 
         tabs = {
@@ -524,7 +527,7 @@ class TouchUI(tk.Tk):
             return
         try:
             raw = self.spindle_speed_var.get().strip()
-            speed = int(float(raw or "12000"))
+            speed = int(float(raw or "4000"))
             if speed <= 0:
                 raise ValueError
         except ValueError:
@@ -633,10 +636,14 @@ class TouchUI(tk.Tk):
         self._pending_jog_button = btn
         self._jog_hold_started = False
 
-        self._jog_hold_after_id = self.after(
-            self.JOG_HOLD_THRESHOLD_MS,
-            lambda a=axis_moves: self._begin_continuous_jog(a),
-        )
+        mode = (self.jog_mode_var.get() or "step").strip().lower()
+
+        if mode == "continuous":
+            self._begin_continuous_jog(axis_moves)
+        else:
+            # STEP mode: do nothing on press
+            # actual single-step happens on release
+            pass
 
     def _begin_continuous_jog(self, axis_moves: dict) -> None:
         self._jog_hold_after_id = None
@@ -664,15 +671,18 @@ class TouchUI(tk.Tk):
             self._jog_hold_after_id = None
 
         axis_moves = self._pending_jog_axis_moves
+        mode = (self.jog_mode_var.get() or "step").strip().lower()
 
-        if self._jog_hold_started:
-            if axis_moves is not None and set(axis_moves.keys()) == {"ROLLER"}:
-                self._stop_roller_jog()
-            else:
-                self._cancel_jog()
-                if self.ctrl.is_connected:
-                    self.ctrl.send_realtime(b"!")
+        if mode == "continuous":
+            if self._jog_hold_started:
+                if axis_moves is not None and set(axis_moves.keys()) == {"ROLLER"}:
+                    self._stop_roller_jog()
+                else:
+                    self._cancel_jog()
+                    if self.ctrl.is_connected:
+                        self.ctrl.send_realtime(b"!")
         else:
+            # STEP mode: always do one step on release
             if axis_moves is not None:
                 self._single_step_jog(axis_moves)
 
@@ -1151,15 +1161,119 @@ class TouchUI(tk.Tk):
         except Exception as e:
             messagebox.showerror("Load Error", str(e))
 
+    def _start_slats_job(self):
+        if self.job_running:
+            return
+
+        if not self.ctrl.is_connected:
+            messagebox.showerror("Run Error", "Not connected to controller.")
+            return
+
+        try:
+            # 👇 THIS comes from your slats CAM logic
+            toolpaths = self.slats_cam_toolpaths
+
+            if not toolpaths:
+                messagebox.showerror("Run Error", "No toolpaths available.")
+                return
+
+            from gantry.roll_feed_cam import build_roll_feed_ops, RollFeedGantry
+
+            gantry = RollFeedGantry(
+                feed_window_y=200.0,
+                gantry_width_x=300.0,
+                feed_clearance_y=20.0,
+            )
+
+            ops, _ = build_roll_feed_ops(toolpaths, gantry)
+
+        except Exception as exc:
+            messagebox.showerror("Run Error", f"Failed to build job: {exc}")
+            return
+
+        self.job_running = True
+        self.job_stopping = False
+        self.job_paused = False
+        self.job_progress_text.set("Job: running")
+        self._append_console("> Running slats job")
+
+        runner = JobRunner(
+            teensy=self.ctrl,
+            rollers=self.rollers,
+            roller_speed_mm_s=float(self.roller_feed_var.get()) / 60.0,
+            log_fn=self._append_console,
+        )
+
+        self._job_runner = runner
+
+        def worker():
+            try:
+                runner.run(ops)
+                self._append_console("> Job complete")
+            except Exception as exc:
+                self._append_console(f"[JOB ERROR] {exc}")
+            finally:
+                self.job_running = False
+                self.job_progress_text.set("Job: idle")
+
+        threading.Thread(target=worker, daemon=True).start()
+        
+
     def _start_gcode_job(self) -> None:
+        if self.job_running:
+            return
+
+        if not self.ctrl.is_connected:
+            messagebox.showerror("Run Error", "Not connected to controller.")
+            return
+
         if not self.gcode_lines:
             messagebox.showerror("Run Error", "No G-code loaded.")
             return
-        self.job_running = True
-        self.job_paused = False
+
         self.job_stopping = False
-        self._append_console("> Starting G-code job (stub)")
+        self.job_paused = False
+        self.job_running = True
         self.job_progress_text.set("Job: running")
+        self._append_console("> Running raw G-code")
+
+        def worker():
+            try:
+                for line in self.gcode_lines:
+                    if self.job_stopping:
+                        break
+
+                    while self.job_paused and not self.job_stopping:
+                        time.sleep(0.05)
+
+                    if self.job_stopping:
+                        break
+
+                    line = line.strip()
+                    if not line:
+                        continue
+
+                    self.ctrl.write_line(line)
+                    self._append_console(f">> {line}")
+
+                    time.sleep(0.01)
+
+                if self.job_stopping:
+                    self._append_console("> Job stopped")
+                else:
+                    self._append_console("> Job complete")
+
+            except Exception as exc:
+                self._append_console(f"[JOB ERROR] {exc}")
+
+            finally:
+                self.job_running = False
+                self.job_paused = False
+                self.job_stopping = False
+                self.job_progress_text.set("Job: idle")
+
+        self.job_thread = threading.Thread(target=worker, daemon=True)
+        self.job_thread.start()
 
     def _pause_gcode_job(self) -> None:
         if self.job_running:
@@ -1177,10 +1291,24 @@ class TouchUI(tk.Tk):
         if self.job_running:
             self.job_stopping = True
             self.job_paused = False
-            self.ctrl.send_realtime(b"\x18")
+
+            if hasattr(self, "_job_runner") and self._job_runner is not None:
+                try:
+                    self._job_runner.request_stop()
+                except Exception:
+                    pass
+
+            try:
+                self._stop_roller_jog()
+            except Exception:
+                pass
+
+            if self.ctrl.is_connected:
+                self.ctrl.send_realtime(b"\x18")
+
             self.job_running = False
             self.job_progress_text.set("Job: idle")
-            self._append_console(">> [JOB STOP] Ctrl-X")
+            self._append_console(">> [JOB STOP] Ctrl-X + mixed job stop")
                 
     # =========================
     # PREVIEW

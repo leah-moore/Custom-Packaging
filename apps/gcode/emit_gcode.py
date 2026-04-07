@@ -1,6 +1,6 @@
 import math
 from dataclasses import is_dataclass
-from gcode.machine_ops_types import (
+from apps.gcode.machine_ops_types import (
     RapidMove, ToolDown, ToolUp, CutPath, FeedAdvance, PivotAction
 )
 

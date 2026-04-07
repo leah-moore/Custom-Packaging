@@ -71,17 +71,31 @@ def build_run_tab(app, parent) -> None:
 
     tk.Button(
         job_btns,
-        text="Run",
+        text="Run G-code",
         command=app._start_gcode_job,
         bg=BTN_GREEN,
         fg=BTN_GREEN_FG,
         font=default_font,
-        width=8,
+        width=10,
         activebackground=BTN_PRESSED,
         activeforeground="#000000",
         bd=3,
         relief="raised",
     ).grid(row=0, column=1, padx=4, pady=4)
+
+    tk.Button(
+        job_btns,
+        text="Run Slats Job",
+        command=app._start_slats_job,
+        bg=BTN_BLUE,
+        fg=BTN_BLUE_FG,
+        font=default_font,
+        width=12,
+        activebackground=BTN_PRESSED,
+        activeforeground="#000000",
+        bd=3,
+        relief="raised",
+    ).grid(row=0, column=2, padx=4, pady=4)
 
     tk.Button(
         job_btns,
