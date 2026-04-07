@@ -42,7 +42,7 @@ from .tabs.slats_tab import build_slats_tab
 from .tabs.slats_cam_tab import build_slats_cam_tab
 from .tabs.diagnostics_tab import build_diagnostics_tab
 from .tabs.photogrammetry_tab import build_photogrammetry_tab
-from ..tablet.dxf_handler import DXFDieline
+from UI.tablet.dxf_handler import DXFDieline
 try:
     from gantry.pi_teensy_coordination.roller_controller import RollerController
 except Exception:
@@ -1671,15 +1671,15 @@ class TouchUI(tk.Tk):
             self.preview_last_tick_s = now
 
         dt = now - self.preview_last_tick_s
+        self.preview_last_tick_s = now
 
         seg_idx = min(self.current_line_index, len(self.gcode_segments) - 1)
         seg = self.gcode_segments[seg_idx]
 
-        feed = getattr(seg, "feed_rate", 1000.0) / 1000.0  # normalize
+        feed_scale = getattr(seg, "feed_rate", 1000.0) / 1000.0
+        feed_scale = max(feed_scale, 0.001)
 
-        self.preview_elapsed_s += dt * self.preview_playback_speed * feed
-
-        self.preview_elapsed_s += dt * self.preview_playback_speed
+        self.preview_elapsed_s += dt * self.preview_playback_speed * feed_scale
 
         if self.preview_total_time_s <= 0:
             self.preview_elapsed_s = 0.0
@@ -2012,7 +2012,29 @@ class TouchUI(tk.Tk):
     # SLATS
     # =========================
     def _use_loaded_mesh_for_slats(self) -> None:
-        self._append_console("> Use loaded mesh for slats (stub)")
+        if self.photogrammetry_raw_mesh is None:
+            self.slat_info_text.set("No photogrammetry mesh loaded")
+            self._append_console("[SLATS] No photogrammetry mesh loaded")
+            return
+
+        self.raw_mesh = self.photogrammetry_raw_mesh
+        self.scan_mesh_path = self.photogrammetry_mesh_path
+
+        mesh_name = "mesh"
+        if self.scan_mesh_path:
+            try:
+                mesh_name = os.path.basename(self.scan_mesh_path)
+            except Exception:
+                pass
+
+        self.mesh_info_text.set(f"Using mesh for slats: {mesh_name}")
+        self.slat_info_text.set("Mesh linked. Ready to generate slats.")
+        self._append_console(f"> Linked photogrammetry mesh to Slats tab: {mesh_name}")
+
+        try:
+            self._draw_slats_preview()
+        except Exception:
+            pass
 
     def _clear_slats(self) -> None:
         self.slat_info_text.set("No slats generated")

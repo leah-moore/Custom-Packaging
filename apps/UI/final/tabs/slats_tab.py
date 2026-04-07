@@ -22,7 +22,7 @@ def build_slats_tab(app, parent) -> None:
     title_font = ("Arial", 9, "bold")
 
     main = tk.Frame(parent, bg=BG)
-    main.pack(fill="both", expand=True)
+    main.pack(fill="both", expand=True, padx=4, pady=4)
 
     # =========================
     # TOP CONTROLS
@@ -104,14 +104,44 @@ def build_slats_tab(app, parent) -> None:
     row = tk.Frame(settings, bg=PANEL_BG)
     row.pack(fill="x", pady=2)
 
-    tk.Label(row, text="Spacing:", bg=PANEL_BG, fg=FG, font=default_font).pack(side="left")
-    tk.Entry(row, textvariable=app.slat_spacing_var, width=10).pack(side="left", padx=6)
+    tk.Label(
+        row,
+        text="Spacing:",
+        bg=PANEL_BG,
+        fg=FG,
+        font=default_font,
+    ).pack(side="left")
+    tk.Entry(
+        row,
+        textvariable=app.slat_spacing_var,
+        width=10,
+    ).pack(side="left", padx=6)
 
-    tk.Label(row, text="Thickness:", bg=PANEL_BG, fg=FG, font=default_font).pack(side="left", padx=(10, 0))
-    tk.Entry(row, textvariable=app.slat_thickness_var, width=10).pack(side="left", padx=6)
+    tk.Label(
+        row,
+        text="Thickness:",
+        bg=PANEL_BG,
+        fg=FG,
+        font=default_font,
+    ).pack(side="left", padx=(10, 0))
+    tk.Entry(
+        row,
+        textvariable=app.slat_thickness_var,
+        width=10,
+    ).pack(side="left", padx=6)
 
-    tk.Label(row, text="Height:", bg=PANEL_BG, fg=FG, font=default_font).pack(side="left", padx=(10, 0))
-    tk.Entry(row, textvariable=app.slat_height_var, width=10).pack(side="left", padx=6)
+    tk.Label(
+        row,
+        text="Height:",
+        bg=PANEL_BG,
+        fg=FG,
+        font=default_font,
+    ).pack(side="left", padx=(10, 0))
+    tk.Entry(
+        row,
+        textvariable=app.slat_height_var,
+        width=10,
+    ).pack(side="left", padx=6)
 
     tk.Checkbutton(
         settings,
@@ -120,7 +150,10 @@ def build_slats_tab(app, parent) -> None:
         bg=PANEL_BG,
         fg=FG,
         selectcolor=BG,
+        activebackground=PANEL_BG,
+        activeforeground=FG,
         font=default_font,
+        command=getattr(app, "_draw_slats_preview", None),
     ).pack(anchor="w", pady=2)
 
     # =========================
@@ -149,6 +182,18 @@ def build_slats_tab(app, parent) -> None:
         justify="left",
     ).pack(fill="x")
 
+    # Optional mesh status line if app has mesh_info_text
+    if hasattr(app, "mesh_info_text"):
+        tk.Label(
+            info_box,
+            textvariable=app.mesh_info_text,
+            bg=PANEL_BG,
+            fg="#999999",
+            font=default_font,
+            anchor="w",
+            justify="left",
+        ).pack(fill="x", pady=(2, 0))
+
     # =========================
     # 3D VIEW
     # =========================
@@ -166,8 +211,10 @@ def build_slats_tab(app, parent) -> None:
     view_box.pack(fill="both", expand=True)
 
     app.slats_figure = Figure(figsize=(8, 6), dpi=100)
-    app.slats_ax = app.slats_figure.add_subplot(111, projection="3d")
     app.slats_figure.patch.set_facecolor("#111111")
+    app.slats_figure.subplots_adjust(left=0.00, right=1.00, bottom=0.00, top=1.00)
+
+    app.slats_ax = app.slats_figure.add_subplot(111, projection="3d")
     app.slats_ax.set_facecolor("#111111")
 
     app.slats_canvas = FigureCanvasTkAgg(app.slats_figure, master=view_box)
