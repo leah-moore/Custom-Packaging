@@ -10,12 +10,9 @@ import sys
 from pathlib import Path
 
 # add /apps to path (you already have something like this)
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-
-# 🔥 ADD THIS LINE
-sys.path.append(str(Path(__file__).resolve().parents[2] / "gcode"))
 
 
 if __name__ == "__main__" and __package__ is None:
@@ -44,10 +41,23 @@ from .tabs.slats_tab import build_slats_tab
 from .tabs.slats_cam_tab import build_slats_cam_tab
 from .tabs.diagnostics_tab import build_diagnostics_tab
 from .tabs.photogrammetry_tab import build_photogrammetry_tab
+
+DXFDieline = None
+
 try:
     from apps.UI.tablet.dxf_handler import DXFDieline
 except Exception:
-    from ..tablet.dxf_handler import DXFDieline
+    try:
+        import sys
+        from pathlib import Path
+
+        ROOT = Path(__file__).resolve().parents[3]
+        if str(ROOT) not in sys.path:
+            sys.path.insert(0, str(ROOT))
+
+        from apps.UI.tablet.dxf_handler import DXFDieline
+    except Exception as exc:
+        print(f"[DXF] Failed to import DXFDieline: {exc}")
 
 try:
     from gantry.pi_teensy_coordination.roller_controller import RollerController
