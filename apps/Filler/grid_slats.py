@@ -20,7 +20,13 @@ import numpy as np
 import trimesh
 
 import matplotlib
-matplotlib.use("MacOSX")   # better than TkAgg on Mac
+# ================== MATPLOTLIB BACKEND ==================
+# Choose based on your OS:
+#   "TkAgg"    = Raspberry Pi with display (or any Linux)
+#   "MacOSX"   = macOS
+#   "Agg"      = Headless (no display, saves to file)
+# =========================================================
+matplotlib.use("TkAgg")   # ← Change this for your OS
 
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
@@ -85,7 +91,7 @@ sidePadX    = margin
 
 MIN_SLAT_OVERHANG = 5.0  # mm — minimum material past silhouette
 
-MIN_CARDBOARD_WIDTH = 2.0  # mm; raise if spikes remain, lower if you lose detail
+MIN_CARDBOARD_WIDTH = 1.0  # mm; raise if spikes remain, lower if you lose detail
 
 # silhouette robustness
 SNAP        = 1e-4     # snap rounding (finer rounding for smoother curves)
@@ -111,20 +117,20 @@ CUT_BOTH_SIDES = True   # or False
 # SMOOTHING & FEATURE SIZE CONTROLS
 # ================================================
 # Blade detail tolerance: removes micro-features smaller than this
-MIN_FEATURE_SIZE = 3         # mm — collapse blade steps/notches smaller than this
+MIN_FEATURE_SIZE = 1.5         # mm — collapse blade steps/notches smaller than this
 #                                # Increase to remove tiny details (1.5-3.0 mm typical)
 #                                # Decrease to keep fine geometry (0.5-1.0 mm)
 
 # Simplify contour curves: removes vertices that don't deviate much from a line
-SIMPLIFY_TOLERANCE = 0.75       # Douglas-Peucker tolerance (mm)
+SIMPLIFY_TOLERANCE = 0.5       # Douglas-Peucker tolerance (mm)
 #                                # 0.1-0.3 = smooth curves, keeps detail
 #                                # 0.5-0.75 = aggressive smoothing, removes micro-zigzags
 #                                # 1.0+ = very simplified, blocky look
 
 # Morphological smoothing: dilate→erode to round sharp corners
 USE_MORPH_SMOOTH = True        # if True, apply dilate→erode smoothing
-MORPH_EXPAND = 1             # expand amount (mm) — increase for rounder curves
-MORPH_SHRINK = 1             # shrink amount (mm) — keep equal to MORPH_EXPAND
+MORPH_EXPAND = 0.5             # expand amount (mm) — increase for rounder curves
+MORPH_SHRINK = 0.5             # shrink amount (mm) — keep equal to MORPH_EXPAND
 # ================================================
 
 @dataclass
