@@ -22,7 +22,7 @@ from ..theme import (
 
 def build_manual_setup_tab(app, parent) -> None:
     default_font = ("Arial", 9, "bold")
-    panel_font = ("Arial", 10, "bold")
+    panel_font = ("Arial", 8, "bold")
     button_font = ("Arial", 10, "bold")
     pos_font = ("Courier", 11, "bold")
     pos_axis_font = ("Arial", 8, "bold")
@@ -35,7 +35,7 @@ def build_manual_setup_tab(app, parent) -> None:
     content.pack(fill="both", expand=True, pady=(6, 0))
 
     left = tk.Frame(content, bg=BG, width=290)
-    left.pack(side="left", fill="y", padx=(0, 4))
+    left.pack(side="left", fill="both", padx=(0, 4))
 
     right = tk.Frame(content, bg=BG)
     right.pack(side="left", fill="both", expand=True)
@@ -50,7 +50,7 @@ def build_manual_setup_tab(app, parent) -> None:
         fg=FG,
         font=panel_font,
         padx=5,
-        pady=4,
+        pady=3,
         bd=2,
         relief="solid",
     )
@@ -68,8 +68,18 @@ def build_manual_setup_tab(app, parent) -> None:
             font=default_font,
         ).grid(row=row_idx, column=0, sticky="w", pady=(4, 1))
 
-        row = tk.Frame(parent_box, bg=PANEL_BG)
-        row.grid(row=row_idx + 1, column=0, sticky="w", padx=(3, 0), pady=(0, 2))
+    def make_radio_row(parent_box, row_idx, label_text, variable, values):
+        tk.Label(
+            parent_box,
+            text=label_text,
+            bg=PANEL_BG,
+            fg=FG,
+            font=default_font,
+        ).grid(row=row_idx, column=0, sticky="w", pady=(4, 2))
+
+        row = tk.Frame(parent_box, bg=PANEL_BG, height=28)
+        row.grid(row=row_idx + 1, column=0, sticky="w", padx=(3, 0), pady=(0, 4))
+        row.grid_propagate(False)
 
         for val in values:
             tk.Radiobutton(
@@ -83,20 +93,20 @@ def build_manual_setup_tab(app, parent) -> None:
                 font=default_font,
                 activebackground=PANEL_BG,
                 activeforeground=FG,
-                pady=0,
+                pady=2,
                 highlightthickness=0,
                 bd=0,
             ).pack(side="left", padx=4)
 
-        return row_idx + 2  # <-- THIS IS THE FIX
+        return row_idx + 2
 
     row = 0
 
-    row = make_radio_row(settings_box, row, "Jog Step (mm)", app.jog_step_var, ["0.1", "1", "10", "20"])
+    row = make_radio_row(settings_box, row, "Jog Step (mm)", app.jog_step_var, ["0.5", "1", "10", "20"])
     row = make_radio_row(settings_box, row, "Jog Feed (mm/min)", app.jog_feed_var, ["100", "500", "1000", "2000"])
-    row = make_radio_row(settings_box, row, "A Step (deg) - Creaser", app.a_rot_step_var, ["1", "5", "10", "45"])
-    row = make_radio_row(settings_box, row, "B Step (deg) - Cutter", app.b_rot_step_var, ["1", "5", "10", "45"])
-    row = make_radio_row(settings_box, row, "Roller Step (mm)", app.roller_step_var, ["0.5", "1", "5", "10"])
+    row = make_radio_row(settings_box, row, "A Step (deg) - Creaser", app.a_rot_step_var, ["1", "5", "45", "90"])
+    row = make_radio_row(settings_box, row, "B Step (deg) - Cutter", app.b_rot_step_var, ["1", "5", "45", "90"])
+    row = make_radio_row(settings_box, row, "Roller Step (mm)", app.roller_step_var, ["1", "5", "10", "20"])
     row = make_radio_row(settings_box, row, "Roller Feed (mm/min)", app.roller_feed_var, ["100", "300", "600", "1200"])
 
     # =====================================================
@@ -109,14 +119,14 @@ def build_manual_setup_tab(app, parent) -> None:
         fg=FG,
         font=panel_font,
         padx=5,
-        pady=3,
+        pady=9,
         bd=2,
         relief="solid",
     )
     ctrl_box.pack(fill="x")
 
     btn_frame = tk.Frame(ctrl_box, bg=PANEL_BG)
-    btn_frame.pack(fill="x")
+    btn_frame.pack(fill="both", expand=True)
 
     machine_buttons = [
         ("Home", app._home, BTN_BLUE, BTN_BLUE_FG),
@@ -124,9 +134,13 @@ def build_manual_setup_tab(app, parent) -> None:
         ("Hold", app._hold, BTN_ORANGE, BTN_ORANGE_FG),
         ("Resume", app._resume, BTN_GREEN, BTN_GREEN_FG),
         ("Reset", app._reset, BTN_RED, BTN_RED_FG),
+        ("Stop Jog", app._cancel_jog, BTN_ORANGE, BTN_ORANGE_FG),
     ]
 
-    for i, (label, fn, color, fgcolor) in enumerate(machine_buttons):
+    for idx, (label, fn, color, fgcolor) in enumerate(machine_buttons):
+        row = idx // 2
+        col = idx % 2
+
         tk.Button(
             btn_frame,
             text=label,
@@ -138,22 +152,23 @@ def build_manual_setup_tab(app, parent) -> None:
             font=default_font,
             bd=1,
             relief="raised",
-            pady=1,
-        ).grid(row=i, column=0, sticky="ew", pady=1)
+            pady=2,
+        ).grid(row=row, column=col, sticky="ew", padx=3, pady=2)
 
     btn_frame.grid_columnconfigure(0, weight=1)
+    btn_frame.grid_columnconfigure(1, weight=1)
 
     estop_label = tk.Label(
-        ctrl_box,
+        btn_frame,
         text="E-STOP",
         bg="#CC0000",
         fg="#FFFFFF",
         font=("Arial", 12, "bold"),
-        pady=7,
+        pady=10,
         relief="raised",
         bd=3,
     )
-    estop_label.pack(fill="x", pady=(3, 1))
+    estop_label.grid(row=3, column=0, columnspan=2, sticky="ew", padx=3, pady=(4, 2))
 
     def estop_press(event=None):
         estop_label.config(bg="#990000", relief="sunken")
@@ -162,6 +177,7 @@ def build_manual_setup_tab(app, parent) -> None:
 
     estop_label.bind("<Button-1>", estop_press)
     estop_label.config(cursor="hand2")
+
 
     # =====================================================
     # RIGHT: JOG CONTROLS
@@ -192,10 +208,10 @@ def build_manual_setup_tab(app, parent) -> None:
             fg=BTN_NEUTRAL_FG,
             activebackground=BTN_PRESSED,
             activeforeground="#000000",
-            bd=3,
+            bd=2,
             relief="raised",
             padx=4,
-            pady=2,
+            pady=1,
         )
         btn.grid(row=row, column=col, padx=3, pady=3, sticky="nsew")
         btn.bind("<ButtonPress-1>", lambda _e, a=axis_moves, b=btn: app._on_jog_press(a, b))
@@ -243,7 +259,7 @@ def build_manual_setup_tab(app, parent) -> None:
         fg=FG,
         font=panel_font,
         padx=6,
-        pady=6,
+        pady=4,
         bd=2,
         relief="solid",
     )
@@ -264,6 +280,17 @@ def build_manual_setup_tab(app, parent) -> None:
     toggle_wrap.pack(side="left", padx=(0, 10))
 
     def update_jog_mode(mode):
+        # STOP any motion when switching modes
+        if hasattr(app, "_cancel_jog"):
+            app._cancel_jog()
+        if hasattr(app, "_stop_roller_jog"):
+            app._stop_roller_jog()
+        if app.ctrl.is_connected:
+            try:
+                app.ctrl.send_realtime(b"\x85")
+            except Exception:
+                pass
+
         app.jog_mode_var.set(mode)
 
         if mode == "step":
@@ -313,7 +340,7 @@ def build_manual_setup_tab(app, parent) -> None:
         bd=2,
         relief="sunken",
         padx=12,
-        pady=6,
+        pady=5,
         highlightthickness=0,
         command=lambda: update_jog_mode("step"),
     )
@@ -329,7 +356,7 @@ def build_manual_setup_tab(app, parent) -> None:
         bd=1,
         relief="flat",
         padx=12,
-        pady=6,
+        pady=5,
         highlightthickness=0,
         command=lambda: update_jog_mode("continuous"),
     )
@@ -348,29 +375,35 @@ def build_manual_setup_tab(app, parent) -> None:
     )
     mode_status.pack(anchor="w")
 
+    app.jog_status_var = tk.StringVar(value="JOG: IDLE")
+
+    jog_status_label = tk.Label(
+        text_col,
+        textvariable=app.jog_status_var,
+        bg=PANEL_BG,
+        fg="#AAAAAA",
+        font=("Arial", 9, "bold"),
+        anchor="w",
+    )
+    jog_status_label.pack(anchor="w")
+
     tk.Label(
         text_col,
-        text="STEP = selected step   •   CONT = continuous jog",
+        text="STEP (tap) = step move   •   CONT (tap) = start/stop jog",
         bg=PANEL_BG,
         fg="#AAAAAA",
         font=default_font,
         anchor="w",
     ).pack(anchor="w")
 
-    # =====================================================
-    # RIGHT: ROLLER HINT
-    # =====================================================
-    hint_row = tk.Frame(right, bg=BG)
-    hint_row.pack(fill="x", pady=(0, 2))
-
     tk.Label(
-        hint_row,
-        text="Roller is Pi-controlled and does not change GRBL axis position",
-        bg=BG,
-        fg="#888888",
-        font=("Arial", 7, "bold"),
-        anchor="e",
-    ).pack(side="right")
+        text_col,
+        text="Roller is Pi-controlled (does not affect GRBL axes)",
+        bg=PANEL_BG,
+        fg="#777777",
+        font=("Arial", 7),
+        anchor="w",
+    ).pack(anchor="w", pady=(2, 0))
 
     # =====================================================
     # RIGHT: MID ROW (OUTPUTS + POSITION/ZERO)
@@ -434,8 +467,9 @@ def build_manual_setup_tab(app, parent) -> None:
         font=default_font,
     ).grid(row=2, column=0, columnspan=2, padx=3, pady=(2, 0), sticky="w")
 
-    speed_row = tk.Frame(outputs_box, bg=PANEL_BG)
+    speed_row = tk.Frame(outputs_box, bg=PANEL_BG, height=28)
     speed_row.grid(row=3, column=0, columnspan=2, padx=3, pady=(2, 6), sticky="w")
+    speed_row.grid_propagate(False)
 
     for rpm in ["1000", "2000", "3000", "4000"]:
         tk.Radiobutton(
@@ -449,7 +483,7 @@ def build_manual_setup_tab(app, parent) -> None:
             font=default_font,
             activebackground=PANEL_BG,
             activeforeground=FG,
-            pady=0,
+            pady=2,
             highlightthickness=0,
             bd=0,
         ).pack(side="left", padx=2)
@@ -503,8 +537,12 @@ def build_manual_setup_tab(app, parent) -> None:
     )
     pos_zero_box.pack(side="left", fill="both", expand=True)
 
-    left_col = tk.Frame(pos_zero_box, bg=PANEL_BG)
-    left_col.pack(side="left", fill="both", expand=True, padx=(0, 6))
+    # ---- top area: DRO on left, WPos/MPos on right ----
+    top_row = tk.Frame(pos_zero_box, bg=PANEL_BG)
+    top_row.pack(fill="x", pady=(2, 4))
+
+    left_col = tk.Frame(top_row, bg=PANEL_BG)
+    left_col.pack(side="left", fill="both", expand=True, padx=(0, 8), anchor="nw")
 
     tk.Label(
         left_col,
@@ -514,24 +552,25 @@ def build_manual_setup_tab(app, parent) -> None:
         font=panel_font,
     ).pack(anchor="w", pady=(0, 2))
 
-    dro_frame = tk.Frame(left_col, bg="#171717", bd=1, relief="solid")
-    dro_frame.pack(fill="x", padx=(0, 1), pady=(0, 3))
+    dro_and_info = tk.Frame(left_col, bg=PANEL_BG)
+    dro_and_info.pack(anchor="w")
+
+    dro_frame = tk.Frame(dro_and_info, bg=PANEL_BG)
+    dro_frame.pack(fill="x", expand=True)
 
     dro_axes = [
-        ("X", app.machine_pos_x_text),
-        ("Y", app.machine_pos_y_text),
-        ("Z", app.machine_pos_z_text),
-        ("A", app.machine_pos_a_text),
-        ("B", app.machine_pos_b_text),
+        ("X", app.work_pos_x_text, app.machine_pos_x_text),
+        ("Y", app.work_pos_y_text, app.machine_pos_y_text),
+        ("Z", app.work_pos_z_text, app.machine_pos_z_text),
+        ("A", app.work_pos_a_text, app.machine_pos_a_text),
+        ("B", app.work_pos_b_text, app.machine_pos_b_text),
     ]
 
-    for idx, (axis_name, pos_var) in enumerate(dro_axes):
-        row = idx // 3
-        col = idx % 3
+    for idx, (axis_name, w_var, m_var) in enumerate(dro_axes):
+        cell = tk.Frame(dro_frame, bg="#171717", padx=14, pady=6)
+        cell.grid(row=0, column=idx, sticky="nsew", padx=4, pady=2)
 
-        cell = tk.Frame(dro_frame, bg="#171717", padx=5, pady=2)
-        cell.grid(row=row, column=col, sticky="nsew")
-
+        # Axis label
         tk.Label(
             cell,
             text=axis_name,
@@ -541,22 +580,36 @@ def build_manual_setup_tab(app, parent) -> None:
             anchor="w",
         ).pack(anchor="w")
 
+        # Work position (main)
         tk.Label(
             cell,
-            textvariable=pos_var,
+            textvariable=w_var,
             bg="#171717",
             fg="#FFD54A",
-            font=pos_font,
-            width=4,
-            anchor="w",
+            font=("Courier", 12, "bold"),
+            width=5,
+            anchor="e",
         ).pack(anchor="w")
 
-    for c in range(3):
+        # Machine position (secondary)
+        tk.Label(
+            cell,
+            textvariable=m_var,
+            bg="#171717",
+            fg="#777777",
+            font=("Courier", 10),
+            width=5,
+            anchor="e",
+        ).pack(anchor="w")
+
+    
+    for c in range(5):
         dro_frame.grid_columnconfigure(c, weight=1)
 
-    right_col = tk.Frame(pos_zero_box, bg=PANEL_BG)
-    right_col.pack(side="left", fill="both", expand=True, padx=(6, 0))
-
+    # ---- zero buttons on right ----
+    right_col = tk.Frame(top_row, bg=PANEL_BG)
+    right_col.pack(side="left", fill="y", expand=False, padx=(12, 0), anchor="ne")
+    
     tk.Label(
         right_col,
         text="Set Work Zero",
@@ -606,8 +659,9 @@ def build_manual_setup_tab(app, parent) -> None:
         font=default_font,
         bd=1,
         relief="raised",
-        pady=0,
-    ).grid(row=0, column=0, padx=2, pady=2, sticky="ew")
+        pady=1,
+        width=10,
+    ).grid(row=0, column=0, padx=8, pady=5, sticky="ew")
 
     tk.Button(
         zero_frame,
@@ -620,8 +674,9 @@ def build_manual_setup_tab(app, parent) -> None:
         font=default_font,
         bd=1,
         relief="raised",
-        pady=0,
-    ).grid(row=1, column=0, padx=2, pady=2, sticky="ew")
+        pady=1,
+        width=10,
+    ).grid(row=1, column=0, padx=8, pady=5, sticky="ew")
 
     tk.Button(
         zero_frame,
@@ -634,8 +689,9 @@ def build_manual_setup_tab(app, parent) -> None:
         font=default_font,
         bd=1,
         relief="raised",
-        pady=0,
-    ).grid(row=2, column=0, padx=2, pady=2, sticky="ew")
+        pady=1,
+        width=10,
+    ).grid(row=2, column=0, padx=8, pady=5, sticky="ew")
 
     tk.Button(
         zero_frame,
@@ -648,8 +704,9 @@ def build_manual_setup_tab(app, parent) -> None:
         font=default_font,
         bd=1,
         relief="raised",
-        pady=0,
-    ).grid(row=0, column=1, padx=2, pady=2, sticky="ew")
+        pady=1,
+        width=10,
+    ).grid(row=0, column=1, padx=8, pady=5, sticky="ew")
 
     tk.Button(
         zero_frame,
@@ -662,10 +719,9 @@ def build_manual_setup_tab(app, parent) -> None:
         font=default_font,
         bd=1,
         relief="raised",
-        pady=0,
-    ).grid(row=1, column=1, padx=2, pady=2, sticky="ew")
-
-    zero_frame.grid_rowconfigure(2, minsize=1)
+        pady=1,
+        width=10,
+    ).grid(row=1, column=1, padx=8, pady=5, sticky="ew")
 
     tk.Button(
         zero_frame,
@@ -678,8 +734,9 @@ def build_manual_setup_tab(app, parent) -> None:
         font=default_font,
         bd=1,
         relief="raised",
-        pady=0,
-    ).grid(row=2, column=1, padx=2, pady=2, sticky="ew")
+        pady=1,
+        width=10,
+    ).grid(row=2, column=1, padx=8, pady=5, sticky="ew")
 
     # =====================================================
     # RIGHT: HOME AXIS

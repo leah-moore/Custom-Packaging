@@ -113,6 +113,7 @@ def _set_initial_viewer_sash(app):
     except Exception:
         pass
 
+
 def _set_slats_cam_view(app):
     mode = app.slats_cam_view_var.get()
 
@@ -130,56 +131,66 @@ def _set_slats_cam_view(app):
         except Exception:
             pass
 
-def build_slats_cam_tab(app, parent):
-    """
-    Full replacement Slats CAM tab UI.
 
-    Important:
-    - This file upgrades the tab UI and initializes the richer state.
-    - The backing methods still need to exist on app (TouchUI), e.g.
-      _generate_slats, _load_dxf, _auto_pack_selected, _clear_packed,
-      _insert_selected_slats, _redraw_all_views, _zoom_workspace, etc.
-    - For mesh support, the button now prefers app._browse_mesh if present,
-      and falls back to app._browse_stl otherwise.
-    """
+def build_slats_cam_tab(app, parent):
     _init_slats_cam_state(app)
     _style_combobox(app)
 
-    # Clean any old contents if the tab is rebuilt.
     for child in parent.winfo_children():
         child.destroy()
 
-    title_font = ("Arial", 13, "bold")
+    title_font = ("Arial", 12, "bold")
     ui_font = ("Arial", 10, "bold")
-    section_font = ("Arial", 11, "bold")
+    section_font = ("Arial", 10, "bold")
     small_font = ("Arial", 9)
 
-    right_col_width = 420
+    right_col_width = 400
 
     main = tk.Frame(parent, bg=BG)
-    main.pack(fill="both", expand=True, padx=8, pady=8)
+    main.pack(fill="both", expand=True, padx=6, pady=6)
 
     # -------------------------
-    # Bottom action bar first so it never gets squished
+    # Bottom action bar
     # -------------------------
     bottom = tk.Frame(main, bg=BG)
-    bottom.pack(side="bottom", fill="x", pady=(8, 0))
+    bottom.pack(side="bottom", fill="x", pady=(6, 0))
+
+    bottom.grid_columnconfigure(0, weight=1, uniform="gcodebtn")
+    bottom.grid_columnconfigure(1, weight=1, uniform="gcodebtn")
 
     tk.Button(
         bottom,
-        text="✓ GENERATE G-CODE",
-        command=getattr(app, "_generate_gcode", getattr(app, "_generate_gcode_stub", lambda: None)),
+        text="✓ CURRENT WINDOW G-CODE",
+        command=getattr(
+            app,
+            "_generate_current_window_gcode",
+            getattr(app, "_generate_gcode_stub", lambda: None),
+        ),
         bg="#EEEEEE",
         fg="#111111",
-        font=("Arial", 14, "bold"),
+        font=("Arial", 12, "bold"),
         height=2,
-    ).pack(fill="x")
+    ).grid(row=0, column=0, sticky="ew", padx=(0, 3))
+
+    tk.Button(
+        bottom,
+        text="✓ CONTINUOUS ALL WINDOWS",
+        command=getattr(
+            app,
+            "_generate_continuous_gcode",
+            getattr(app, "_generate_gcode_stub", lambda: None),
+        ),
+        bg="#EEEEEE",
+        fg="#111111",
+        font=("Arial", 12, "bold"),
+        height=2,
+    ).grid(row=0, column=1, sticky="ew", padx=(3, 0))
 
     # -------------------------
     # TOP STRIP
     # -------------------------
     top_strip = tk.Frame(main, bg=BG)
-    top_strip.pack(side="top", fill="x", pady=(0, 8))
+    top_strip.pack(side="top", fill="x", pady=(0, 6))
 
     setup_frame = tk.LabelFrame(
         top_strip,
@@ -187,319 +198,259 @@ def build_slats_cam_tab(app, parent):
         bg=PANEL_BG,
         fg=FG,
         font=title_font,
-        padx=10,
-        pady=8,
-        bd=2,
+        padx=6,
+        pady=4,
+        bd=1,
         relief="solid",
     )
-    setup_frame.pack(side="left", fill="x", expand=True, padx=(0, 8))
+    setup_frame.pack(fill="x", expand=True)
 
-    # Mesh browse callback: prefer OBJ/STL-aware method if present.
     browse_mesh_cmd = getattr(app, "_browse_mesh", None)
     if browse_mesh_cmd is None:
         browse_mesh_cmd = getattr(app, "_browse_stl", lambda: None)
 
-    # row 1: mesh generation
-    row1 = tk.Frame(setup_frame, bg=PANEL_BG)
-    row1.pack(fill="x", pady=2)
+    setup_inner = tk.Frame(setup_frame, bg=PANEL_BG)
+    setup_inner.pack(fill="x", expand=True)
+
+    setup_left = tk.Frame(setup_inner, bg=PANEL_BG)
+    setup_left.pack(side="left", fill="x", expand=True, padx=(0, 8))
+
+    setup_right = tk.Frame(setup_inner, bg=PANEL_BG)
+    setup_right.pack(side="right", anchor="ne")
+
+    # -------------------------
+    # LEFT COLUMN
+    # -------------------------
+    left_row1 = tk.Frame(setup_left, bg=PANEL_BG)
+    left_row1.pack(fill="x", pady=1)
 
     tk.Button(
-        row1,
+        left_row1,
         text="Browse Mesh",
         command=browse_mesh_cmd,
         bg=BTN_NEUTRAL,
         fg=BTN_NEUTRAL_FG,
         font=ui_font,
-        width=12,
-    ).pack(side="left", padx=(0, 10))
+        width=10,
+        pady=0,
+    ).pack(side="left", padx=(0, 3))
 
-    tk.Label(row1, text="XY Slats:", bg=PANEL_BG, fg=FG, font=ui_font).pack(side="left", padx=(4, 4))
+    tk.Button(
+        left_row1,
+        text="Photo Mesh",
+        command=getattr(app, "_use_photogrammetry_mesh_for_slats_cam", lambda: None),
+        bg=BTN_NEUTRAL,
+        fg=BTN_NEUTRAL_FG,
+        font=ui_font,
+        width=10,
+        pady=0,
+    ).pack(side="left", padx=2)
+
+    tk.Button(
+        left_row1,
+        text="Vision DXF",
+        command=getattr(app, "_use_vision_dxf_for_slats_cam", lambda: None),
+        bg=BTN_NEUTRAL,
+        fg=BTN_NEUTRAL_FG,
+        font=ui_font,
+        width=10,
+        pady=0,
+    ).pack(side="left", padx=2)
+
+    tk.Button(
+        left_row1,
+        text="Slats Setup",
+        command=getattr(app, "_use_slats_tab_setup_for_slats_cam", lambda: None),
+        bg=BTN_NEUTRAL,
+        fg=BTN_NEUTRAL_FG,
+        font=ui_font,
+        width=10,
+        pady=0,
+    ).pack(side="left", padx=2)
+
+    left_row2 = tk.Frame(setup_left, bg=PANEL_BG)
+    left_row2.pack(fill="x", pady=1)
+
+    tk.Label(left_row2, text="XY:", bg=PANEL_BG, fg=FG, font=ui_font).pack(side="left", padx=(0, 3))
     app.xy_combo = ttk.Combobox(
-        row1,
+        left_row2,
         textvariable=app.xy_count_var,
         values=[str(i) for i in range(2, 11)],
         state="readonly",
         width=4,
         style="Slats.TCombobox",
     )
-    app.xy_combo.pack(side="left", padx=(0, 10))
+    app.xy_combo.pack(side="left", padx=(0, 4))
 
-    tk.Label(row1, text="XZ Slats:", bg=PANEL_BG, fg=FG, font=ui_font).pack(side="left", padx=(4, 4))
+    tk.Label(left_row2, text="XZ:", bg=PANEL_BG, fg=FG, font=ui_font).pack(side="left", padx=(4, 3))
     app.xz_combo = ttk.Combobox(
-        row1,
+        left_row2,
         textvariable=app.xz_count_var,
         values=[str(i) for i in range(2, 11)],
         state="readonly",
         width=4,
         style="Slats.TCombobox",
     )
-    app.xz_combo.pack(side="left", padx=(0, 10))
+    app.xz_combo.pack(side="left", padx=(0, 5))
 
     tk.Button(
-        row1,
-        text="Generate Slats",
+        left_row2,
+        text="Generate",
         command=getattr(app, "_generate_slats", lambda: None),
         bg=BTN_BLUE,
         fg=BTN_BLUE_FG,
         font=ui_font,
-        width=14,
-    ).pack(side="left", padx=(0, 10))
-
-    tk.Frame(row1, bg=PANEL_BG).pack(side="left", fill="x", expand=True)
-
-    tk.Label(
-        row1,
-        textvariable=app.slats_cam_slats_info_var,
-        bg=PANEL_BG,
-        fg="#FFD54A",
-        font=ui_font,
-    ).pack(side="right", padx=(10, 0))
-
-    # row 2: sheet / packing actions
-    row2 = tk.Frame(setup_frame, bg=PANEL_BG)
-    row2.pack(fill="x", pady=2)
+        width=8,
+        pady=0,
+    ).pack(side="left", padx=2)
 
     tk.Button(
-        row2,
+        left_row2,
         text="Load DXF",
         command=getattr(app, "_load_dxf", lambda: None),
         bg=BTN_NEUTRAL,
         fg=BTN_NEUTRAL_FG,
         font=ui_font,
-        width=14,
-    ).pack(side="left", padx=(0, 8))
+        width=8,
+        pady=0,
+    ).pack(side="left", padx=2)
+
+    left_row3 = tk.Frame(setup_left, bg=PANEL_BG)
+    left_row3.pack(fill="x", pady=1)
 
     tk.Button(
-        row2,
-        text="Blank Sheet",
+        left_row3,
+        text="Blank",
         command=getattr(app, "_use_blank_sheet", lambda: None),
         bg=BTN_NEUTRAL,
         fg=BTN_NEUTRAL_FG,
         font=ui_font,
-        width=14,
-    ).pack(side="left", padx=(0, 8))
+        width=8,
+        pady=0,
+    ).pack(side="left", padx=(0, 2))
 
     tk.Button(
-        row2,
-        text="Auto-Pack Selected",
-        command=app._auto_pack_selected,
+        left_row3,
+        text="Auto-Pack",
+        command=getattr(app, "_auto_pack_selected", lambda: None),
         bg=BTN_BLUE,
         fg=BTN_BLUE_FG,
         font=ui_font,
-        width=14,
-    ).pack(side="left", padx=(0, 8))
+        width=8,
+        pady=0,
+    ).pack(side="left", padx=2)
 
     tk.Button(
-        row2,
+        left_row3,
         text="Clear Packed",
         command=getattr(app, "_clear_packed", lambda: None),
         bg=BTN_ORANGE,
         fg=BTN_ORANGE_FG,
         font=ui_font,
-        width=14,
-    ).pack(side="left", padx=(0, 8))
+        width=10,
+        pady=0,
+    ).pack(side="left", padx=2)
 
-    # row 3: dimensions + status
-    row3 = tk.Frame(setup_frame, bg=PANEL_BG)
-    row3.pack(fill="x", pady=2)
+    # -------------------------
+    # RIGHT COLUMN
+    # -------------------------
+    right_row1 = tk.Frame(setup_right, bg=PANEL_BG)
+    right_row1.pack(anchor="e", pady=0)
 
-    for c in range(8):
-        row3.grid_columnconfigure(c, weight=0)
-    row3.grid_columnconfigure(7, weight=1)
+    tk.Label(right_row1, text="Cardboard W", bg=PANEL_BG, fg=FG, font=ui_font).pack(side="left", padx=(0, 4))
+    tk.Entry(right_row1, textvariable=app.slats_cam_cardboard_width_mm, width=7).pack(side="left", padx=(0, 6))
 
-    tk.Label(row3, text="Cardboard W", bg=PANEL_BG, fg=FG, font=ui_font).grid(row=0, column=0, sticky="w", padx=(0, 6))
-    tk.Entry(row3, textvariable=app.slats_cam_cardboard_width_mm, width=8).grid(row=0, column=1, sticky="w", padx=(0, 12))
+    tk.Label(right_row1, text="Feed Len", bg=PANEL_BG, fg=FG, font=ui_font).pack(side="left", padx=(0, 4))
+    tk.Entry(right_row1, textvariable=app.slats_cam_feed_window_mm, width=7).pack(side="left", padx=(0, 6))
 
-    tk.Label(row3, text="Feed Len", bg=PANEL_BG, fg=FG, font=ui_font).grid(row=0, column=2, sticky="w", padx=(0, 6))
-    tk.Entry(row3, textvariable=app.slats_cam_feed_window_mm, width=8).grid(row=0, column=3, sticky="w", padx=(0, 12))
+    tk.Label(right_row1, text="Gap", bg=PANEL_BG, fg=FG, font=ui_font).pack(side="left", padx=(0, 4))
+    tk.Entry(right_row1, textvariable=app.slats_cam_gap_mm_var, width=5).pack(side="left", padx=(0, 8))
 
-    tk.Label(row3, text="Gap", bg=PANEL_BG, fg=FG, font=ui_font).grid(row=0, column=4, sticky="w", padx=(0, 6))
-    tk.Entry(row3, textvariable=app.slats_cam_gap_mm_var, width=5).grid(row=0, column=5, sticky="w", padx=(0, 16))
+    tk.Label(right_row1, text="Overview:", bg=PANEL_BG, fg=FG, font=ui_font).pack(side="left", padx=(6, 4))
 
-    tk.Label(row3, text="Status:", bg=PANEL_BG, fg=FG, font=ui_font).grid(row=0, column=6, sticky="w", padx=(0, 6))
-    tk.Label(row3, textvariable=app.slats_cam_status_var, bg=PANEL_BG, fg="#FFD54A", font=ui_font).grid(row=0, column=7, sticky="w")
-
-    # row 4: overview + active feed window controls
-    row4 = tk.Frame(setup_frame, bg=PANEL_BG)
-    row4.pack(fill="x", pady=2)
-
-    # LEFT SIDE: overview / rotate controls
-    row4_left = tk.Frame(row4, bg=PANEL_BG)
-    row4_left.pack(side="left", fill="x", expand=True)
-
-    tk.Label(row4_left, text="Overview:", bg=PANEL_BG, fg=FG, font=ui_font).pack(side="left", padx=(0, 8))
-    tk.Button(row4_left, text="−", command=lambda: getattr(app, "_zoom_workspace", lambda _s: None)(0.9),
-            bg=BTN_NEUTRAL, fg=BTN_NEUTRAL_FG, width=3, font=ui_font).pack(side="left", padx=1)
-    tk.Button(row4_left, text="+", command=lambda: getattr(app, "_zoom_workspace", lambda _s: None)(1.1),
-            bg=BTN_NEUTRAL, fg=BTN_NEUTRAL_FG, width=3, font=ui_font).pack(side="left", padx=1)
-    
     tk.Button(
-        row4_left,
-        text="Fit View",
+        right_row1,
+        text="−",
+        command=lambda: getattr(app, "_zoom_workspace", lambda _s: None)(0.9),
+        bg=BTN_NEUTRAL,
+        fg=BTN_NEUTRAL_FG,
+        width=3,
+        font=ui_font,
+        pady=0,
+    ).pack(side="left", padx=1)
+
+    tk.Button(
+        right_row1,
+        text="+",
+        command=lambda: getattr(app, "_zoom_workspace", lambda _s: None)(1.1),
+        bg=BTN_NEUTRAL,
+        fg=BTN_NEUTRAL_FG,
+        width=3,
+        font=ui_font,
+        pady=0,
+    ).pack(side="left", padx=1)
+
+    tk.Button(
+        right_row1,
+        text="Fit",
         command=getattr(app, "_fit_workspace", lambda: None),
         bg=BTN_NEUTRAL,
         fg=BTN_NEUTRAL_FG,
         font=ui_font,
-        width=10,
-    ).pack(side="left", padx=8)
+        width=5,
+        pady=0,
+    ).pack(side="left", padx=(4, 2))
+
+    right_row2 = tk.Frame(setup_right, bg=PANEL_BG)
+    right_row2.pack(anchor="e", pady=1)
+
+    tk.Label(right_row2, text="Window:", bg=PANEL_BG, fg=FG, font=ui_font).pack(side="left", padx=(0, 4))
 
     tk.Button(
-        row4_left,
-        text="Rotate -90",
-        command=lambda: getattr(app, "_rotate_active", lambda _deg: None)(-90),
-        bg=BTN_ORANGE,
-        fg=BTN_ORANGE_FG,
-        font=ui_font,
-        width=10,
-    ).pack(side="left", padx=8)
-
-    tk.Button(
-        row4_left,
-        text="Rotate +90",
-        command=lambda: getattr(app, "_rotate_active", lambda _deg: None)(90),
-        bg=BTN_ORANGE,
-        fg=BTN_ORANGE_FG,
-        font=ui_font,
-        width=10,
-    ).pack(side="left", padx=4)
-
-    # RIGHT SIDE: active window controls + info
-    row4_right = tk.Frame(row4, bg=PANEL_BG)
-    row4_right.pack(side="right", anchor="e", padx=(24, 0))
-
-    window_top = tk.Frame(row4_right, bg=PANEL_BG)
-    window_top.pack(anchor="e")
-
-    tk.Label(
-        window_top,
-        text="Active Window:",
-        bg=PANEL_BG,
-        fg=FG,
-        font=ui_font,
-    ).pack(side="left", padx=(0, 6))
-
-    tk.Button(
-        window_top,
+        right_row2,
         text="◀ Prev",
         command=getattr(app, "_prev_window", lambda: None),
         bg=BTN_NEUTRAL,
         fg=BTN_NEUTRAL_FG,
         font=ui_font,
-        width=9,
+        width=8,
+        pady=0,
     ).pack(side="left", padx=2)
 
     tk.Button(
-        window_top,
+        right_row2,
         text="Next ▶",
         command=getattr(app, "_next_window", lambda: None),
         bg=BTN_NEUTRAL,
         fg=BTN_NEUTRAL_FG,
         font=ui_font,
-        width=9,
-    ).pack(side="left", padx=2)
+        width=8,
+        pady=0,
+    ).pack(side="left", padx=(0, 8))
 
     tk.Label(
-        row4_right,
+        right_row2,
+        textvariable=app.slats_cam_slats_info_var,
+        bg=PANEL_BG,
+        fg="#FFD54A",
+        font=ui_font,
+    ).pack(side="left", padx=(6, 0))
+
+    tk.Label(
+        right_row2,
         textvariable=app.window_info_var,
         bg=PANEL_BG,
         fg="#FFD54A",
         font=ui_font,
-        justify="right",
-        anchor="e",
-    ).pack(anchor="e", pady=(4, 0))
+    ).pack(side="left", padx=(10, 0))
 
-    # top-right controls
-    library_ctrl = tk.LabelFrame(
-        top_strip,
-        text="Slat Library",
-        bg=PANEL_BG,
-        fg=FG,
-        font=section_font,
-        bd=2,
-        relief="solid",
-        width=right_col_width,
-    )
-    library_ctrl.pack(side="right", fill="y")
-    library_ctrl.pack_propagate(False)
-    
-
-    btngrid = tk.Frame(library_ctrl, bg=PANEL_BG)
-    btngrid.pack(fill="both", expand=True, padx=8, pady=(8, 4))
-    for col in range(2):
-        btngrid.grid_columnconfigure(col, weight=1, uniform="libbtn")
-
-    tk.Button(
-        btngrid,
-        text="Select All",
-        command=getattr(app, "_select_all_slats", lambda: None),
-        bg=BTN_BLUE,
-        fg=BTN_BLUE_FG,
-        font=ui_font,
-    ).grid(row=0, column=0, padx=3, pady=3, sticky="ew")
-
-    tk.Button(
-        btngrid,
-        text="Clear",
-        command=getattr(app, "_clear_selection", lambda: None),
-        bg=BTN_NEUTRAL,
-        fg=BTN_NEUTRAL_FG,
-        font=ui_font,
-    ).grid(row=0, column=1, padx=3, pady=3, sticky="ew")
-
-    tk.Button(
-        btngrid,
-        text="Select XY",
-        command=lambda: getattr(app, "_select_family", lambda _f: None)("XY"),
-        bg=BTN_NEUTRAL,
-        fg=BTN_NEUTRAL_FG,
-        font=ui_font,
-    ).grid(row=1, column=0, padx=3, pady=3, sticky="ew")
-
-    tk.Button(
-        btngrid,
-        text="Select XZ",
-        command=lambda: getattr(app, "_select_family", lambda _f: None)("XZ"),
-        bg=BTN_NEUTRAL,
-        fg=BTN_NEUTRAL_FG,
-        font=ui_font,
-    ).grid(row=1, column=1, padx=3, pady=3, sticky="ew")
-
-    tk.Button(
-        btngrid,
-        text="Select Left",
-        command=lambda: getattr(app, "_select_side", lambda _s: None)("left"),
-        bg=BTN_NEUTRAL,
-        fg=BTN_NEUTRAL_FG,
-        font=ui_font,
-    ).grid(row=2, column=0, padx=3, pady=3, sticky="ew")
-
-    tk.Button(
-        btngrid,
-        text="Select Right",
-        command=lambda: getattr(app, "_select_side", lambda _s: None)("right"),
-        bg=BTN_NEUTRAL,
-        fg=BTN_NEUTRAL_FG,
-        font=ui_font,
-    ).grid(row=2, column=1, padx=3, pady=3, sticky="ew")
-
-    tk.Button(
-        btngrid,
-        text="Insert Selected",
-        command=getattr(app, "_insert_selected_slats", lambda: None),
-        bg=BTN_BLUE,
-        fg=BTN_BLUE_FG,
-        font=ui_font,
-    ).grid(row=3, column=0, columnspan=2, padx=3, pady=(6, 3), sticky="ew")
-
-    btnrow3 = tk.Frame(library_ctrl, bg=PANEL_BG)
-    btnrow3.pack(fill="x", padx=8, pady=(0, 8))
     tk.Label(
-        btnrow3,
-        textvariable=app.selected_count_var,
+        right_row2,
+        textvariable=app.slats_cam_status_var,
         bg=PANEL_BG,
-        fg="#CCCCCC",
-        font=small_font,
-    ).pack(side="left")
+        fg="#FFD54A",
+        font=ui_font,
+    ).pack(side="left", padx=(10, 0))
 
     # -------------------------
     # Body
@@ -508,16 +459,19 @@ def build_slats_cam_tab(app, parent):
     body.pack(side="top", fill="both", expand=True)
 
     left = tk.Frame(body, bg=BG)
-    left.pack(side="left", fill="both", expand=True, padx=(0, 8))
+    left.pack(side="left", fill="both", expand=True, padx=(0, 6))
 
     right = tk.Frame(body, bg=BG, width=right_col_width)
     right.pack(side="right", fill="both")
     right.pack_propagate(False)
 
-    # --- viewer switcher instead of vertical split ---
+    # -------------------------
+    # Left side: viewer switch + canvases
+    # -------------------------
     view_switch = tk.Frame(left, bg=BG)
-    view_switch.pack(fill="x", pady=(0, 6))
+    view_switch.pack(fill="x", pady=(0, 4))
 
+    # left side: view mode toggles
     tk.Radiobutton(
         view_switch,
         text="Layout Overview",
@@ -529,9 +483,9 @@ def build_slats_cam_tab(app, parent):
         fg=BTN_NEUTRAL_FG,
         selectcolor=BTN_BLUE,
         font=ui_font,
-        width=16,
-        padx=10,
-        pady=4,
+        width=14,
+        padx=8,
+        pady=2,
     ).pack(side="left", padx=(0, 6))
 
     tk.Radiobutton(
@@ -545,10 +499,33 @@ def build_slats_cam_tab(app, parent):
         fg=BTN_NEUTRAL_FG,
         selectcolor=BTN_BLUE,
         font=ui_font,
-        width=16,
-        padx=10,
-        pady=4,
+        width=14,
+        padx=8,
+        pady=2,
     ).pack(side="left")
+
+    # right side: rotate controls
+    tk.Button(
+        view_switch,
+        text="Rotate +90°",
+        command=lambda: getattr(app, "_rotate_active", lambda _deg: None)(90),
+        bg=BTN_ORANGE,
+        fg=BTN_ORANGE_FG,
+        font=ui_font,
+        width=10,
+        pady=0,
+    ).pack(side="right", padx=(6, 0))
+
+    tk.Button(
+        view_switch,
+        text="Rotate -90°",
+        command=lambda: getattr(app, "_rotate_active", lambda _deg: None)(-90),
+        bg=BTN_ORANGE,
+        fg=BTN_ORANGE_FG,
+        font=ui_font,
+        width=10,
+        pady=0,
+    ).pack(side="right", padx=(6, 0))
 
     viewer_host = tk.Frame(left, bg=BG)
     viewer_host.pack(fill="both", expand=True)
@@ -559,7 +536,7 @@ def build_slats_cam_tab(app, parent):
         bg=PANEL_BG,
         fg=FG,
         font=section_font,
-        bd=2,
+        bd=1,
         relief="solid",
     )
     overview_frame.place(relx=0, rely=0, relwidth=1, relheight=1)
@@ -569,7 +546,8 @@ def build_slats_cam_tab(app, parent):
         text="Active Feed Window (machine coordinates)",
         bg=PANEL_BG,
         fg=FG,
-        bd=2,
+        font=section_font,
+        bd=1,
         relief="solid",
     )
     window_frame.place(relx=0, rely=0, relwidth=1, relheight=1)
@@ -592,7 +570,6 @@ def build_slats_cam_tab(app, parent):
     app.workspace_canvas.bind("<B3-Motion>", getattr(app, "_on_workspace_pan_move", lambda e: None))
     app.workspace_canvas.bind("<MouseWheel>", getattr(app, "_on_workspace_mousewheel", lambda e: None))
 
-
     app.window_canvas = tk.Canvas(
         window_frame,
         bg="#090909",
@@ -601,6 +578,108 @@ def build_slats_cam_tab(app, parent):
     )
     app.window_canvas.pack(fill="both", expand=True, padx=4, pady=4)
     app.window_canvas.bind("<Configure>", lambda e: getattr(app, "_redraw_all_views", lambda: None)())
+
+    # -------------------------
+    # Right side: compact library controls + library tiles
+    # -------------------------
+    library_ctrl = tk.LabelFrame(
+        right,
+        text="Slat Library",
+        bg=PANEL_BG,
+        fg=FG,
+        font=section_font,
+        bd=1,
+        relief="solid",
+        padx=6,
+        pady=4,
+    )
+    library_ctrl.pack(side="top", fill="x", pady=(0, 6))
+
+    btngrid = tk.Frame(library_ctrl, bg=PANEL_BG)
+    btngrid.pack(fill="x", padx=4, pady=(4, 2))
+    for col in range(2):
+        btngrid.grid_columnconfigure(col, weight=1, uniform="libbtn")
+
+    tk.Button(
+        btngrid,
+        text="Select All",
+        command=getattr(app, "_select_all_slats", lambda: None),
+        bg=BTN_BLUE,
+        fg=BTN_BLUE_FG,
+        font=ui_font,
+        pady=0,
+    ).grid(row=0, column=0, padx=2, pady=2, sticky="ew")
+
+    tk.Button(
+        btngrid,
+        text="Clear",
+        command=getattr(app, "_clear_selection", lambda: None),
+        bg=BTN_NEUTRAL,
+        fg=BTN_NEUTRAL_FG,
+        font=ui_font,
+        pady=0,
+    ).grid(row=0, column=1, padx=2, pady=2, sticky="ew")
+
+    tk.Button(
+        btngrid,
+        text="Select XY",
+        command=lambda: getattr(app, "_select_family", lambda _f: None)("XY"),
+        bg=BTN_NEUTRAL,
+        fg=BTN_NEUTRAL_FG,
+        font=ui_font,
+        pady=0,
+    ).grid(row=1, column=0, padx=2, pady=2, sticky="ew")
+
+    tk.Button(
+        btngrid,
+        text="Select XZ",
+        command=lambda: getattr(app, "_select_family", lambda _f: None)("XZ"),
+        bg=BTN_NEUTRAL,
+        fg=BTN_NEUTRAL_FG,
+        font=ui_font,
+        pady=0,
+    ).grid(row=1, column=1, padx=2, pady=2, sticky="ew")
+
+    tk.Button(
+        btngrid,
+        text="Select Left",
+        command=lambda: getattr(app, "_select_side", lambda _s: None)("left"),
+        bg=BTN_NEUTRAL,
+        fg=BTN_NEUTRAL_FG,
+        font=ui_font,
+        pady=0,
+    ).grid(row=2, column=0, padx=2, pady=2, sticky="ew")
+
+    tk.Button(
+        btngrid,
+        text="Select Right",
+        command=lambda: getattr(app, "_select_side", lambda _s: None)("right"),
+        bg=BTN_NEUTRAL,
+        fg=BTN_NEUTRAL_FG,
+        font=ui_font,
+        pady=0,
+    ).grid(row=2, column=1, padx=2, pady=2, sticky="ew")
+
+    tk.Button(
+        btngrid,
+        text="Insert Selected",
+        command=getattr(app, "_insert_selected_slats", lambda: None),
+        bg=BTN_BLUE,
+        fg=BTN_BLUE_FG,
+        font=ui_font,
+        pady=0,
+    ).grid(row=3, column=0, columnspan=2, padx=2, pady=(4, 2), sticky="ew")
+
+    btnrow3 = tk.Frame(library_ctrl, bg=PANEL_BG)
+    btnrow3.pack(fill="x", padx=4, pady=(0, 2))
+
+    tk.Label(
+        btnrow3,
+        textvariable=app.selected_count_var,
+        bg=PANEL_BG,
+        fg="#CCCCCC",
+        font=small_font,
+    ).pack(side="left")
 
     library_host = tk.Frame(right, bg=BG)
     library_host.pack(fill="both", expand=True)
@@ -628,14 +707,12 @@ def build_slats_cam_tab(app, parent):
     app.library_canvas_container.bind("<Configure>", getattr(app, "_on_library_canvas_configure", lambda e: None))
     app.library_canvas_container.bind_all("<MouseWheel>", getattr(app, "_on_library_mousewheel", lambda e: None), add="+")
 
-    # Backward compatibility aliases so older methods don't explode if they
-    # still reference the old widget names from the simple tab.
+    # Backward compatibility aliases
     app.overview_canvas = app.workspace_canvas
     app.feed_canvas = app.window_canvas
 
     _set_slats_cam_view(app)
 
-    # Build empty/default visuals if app already has helpers.
     redraw = getattr(app, "_redraw_all_views", None)
     if callable(redraw):
         try:

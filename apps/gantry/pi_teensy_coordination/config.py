@@ -16,14 +16,17 @@ TEENSY_BAUD = 115200
 
 # GPIO17 → Physical pin 11
 # Connect to TMC2209 STEP pin
+#grey wire
 ROLLER_STEP_PIN = 17 
 
 # GPIO27 → Physical pin 13
 # Connect to TMC2209 DIR pin
+#white wire
 ROLLER_DIR_PIN = 27
 
 # GPIO22 → Physical pin 15
 # Connect to TMC2209 EN / ENN pin (usually active-low)
+#black wire
 ROLLER_ENABLE_PIN = 22
 
 # IMPORTANT:

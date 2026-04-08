@@ -22,8 +22,9 @@ from ..theme import (
 
 
 def build_run_tab(app, parent) -> None:
-    default_font = ("Arial", 8, "bold")
-    small_font = ("Courier", 12)
+    default_font = ("Arial", 10, "bold")
+    mono_font = ("Courier New", 12)
+    small_font = ("Courier", 14)
 
     main = tk.Frame(parent, bg=BG)
     main.pack(fill="both", expand=True, padx=0, pady=0)
@@ -71,6 +72,25 @@ def build_run_tab(app, parent) -> None:
 
     tk.Button(
         job_btns,
+        text="Load Current Window",
+        command=getattr(
+            app,
+            "_load_current_window_gcode",
+            lambda: None
+        ),
+        bg=BTN_BLUE,
+        fg=BTN_BLUE_FG,
+        font=default_font,
+        width=18,
+        activebackground=BTN_PRESSED,
+        activeforeground="#000000",
+        bd=3,
+        relief="raised",
+    ).grid(row=0, column=1, padx=4, pady=4)
+
+
+    tk.Button(
+        job_btns,
         text="Run G-code",
         command=app._start_gcode_job,
         bg=BTN_GREEN,
@@ -81,7 +101,7 @@ def build_run_tab(app, parent) -> None:
         activeforeground="#000000",
         bd=3,
         relief="raised",
-    ).grid(row=0, column=1, padx=4, pady=4)
+    ).grid(row=0, column=2, padx=4, pady=4)
 
     tk.Button(
         job_btns,
@@ -95,7 +115,7 @@ def build_run_tab(app, parent) -> None:
         activeforeground="#000000",
         bd=3,
         relief="raised",
-    ).grid(row=0, column=2, padx=4, pady=4)
+    ).grid(row=0, column=3, padx=4, pady=4)
 
     tk.Button(
         job_btns,
@@ -109,7 +129,7 @@ def build_run_tab(app, parent) -> None:
         activeforeground="#000000",
         bd=3,
         relief="raised",
-    ).grid(row=0, column=2, padx=4, pady=4)
+    ).grid(row=0, column=4, padx=4, pady=4)
 
     tk.Button(
         job_btns,
@@ -123,7 +143,7 @@ def build_run_tab(app, parent) -> None:
         activeforeground="#000000",
         bd=3,
         relief="raised",
-    ).grid(row=0, column=3, padx=4, pady=4)
+    ).grid(row=0, column=5, padx=4, pady=4)
 
     tk.Button(
         job_btns,
@@ -137,7 +157,78 @@ def build_run_tab(app, parent) -> None:
         activeforeground="#000000",
         bd=3,
         relief="raised",
-    ).grid(row=0, column=4, padx=4, pady=4)
+    ).grid(row=0, column=6, padx=4, pady=4)
+
+    # =========================
+    # TRUE 2-COLUMN G-CODE TABLE
+    # =========================
+    table_outer = tk.Frame(job_box, bg="#2a2a2a", bd=1)
+    table_outer.pack(fill="both", expand=True, pady=(6, 4))
+
+    # header row
+    header = tk.Frame(table_outer, bg="#2a2a2a")
+    header.pack(fill="x")
+
+    header_status = tk.Label(
+        header,
+        text="OK",
+        bg="#2a2a2a",
+        fg="#ffffff",
+        font=default_font,
+        bd=1,
+        relief="solid",
+        width=8,
+        anchor="center",
+    )
+    header_status.pack(side="left", fill="y")
+
+    header_gcode = tk.Label(
+        header,
+        text="G-code",
+        bg="#2a2a2a",
+        fg="#ffffff",
+        font=default_font,
+        bd=1,
+        relief="solid",
+        anchor="center",
+    )
+    header_gcode.pack(side="left", fill="x", expand=True)
+
+    # scrollable body
+    body_outer = tk.Frame(table_outer, bg="#2a2a2a")
+    body_outer.pack(fill="both", expand=True)
+
+    canvas = tk.Canvas(
+        body_outer,
+        bg="#1e1e1e",
+        highlightthickness=0,
+        bd=0,
+    )
+    canvas.pack(side="left", fill="both", expand=True)
+
+    scrollbar = ttk.Scrollbar(body_outer, orient="vertical", command=canvas.yview)
+    scrollbar.pack(side="right", fill="y")
+
+    canvas.configure(yscrollcommand=scrollbar.set)
+
+    rows_frame = tk.Frame(canvas, bg="#1e1e1e")
+    canvas_window = canvas.create_window((0, 0), window=rows_frame, anchor="nw")
+
+    def _on_rows_configure(event):
+        canvas.configure(scrollregion=canvas.bbox("all"))
+
+    def _on_canvas_configure(event):
+        canvas.itemconfigure(canvas_window, width=event.width)
+
+    rows_frame.bind("<Configure>", _on_rows_configure)
+    canvas.bind("<Configure>", _on_canvas_configure)
+
+    # attach to app for population/updating from app.py
+    app.gcode_table_canvas = canvas
+    app.gcode_table_rows_frame = rows_frame
+    app.gcode_row_frames = []
+    app.gcode_row_status_labels = []
+    app.gcode_row_code_labels = []
 
     mdi_box = tk.LabelFrame(
         main,

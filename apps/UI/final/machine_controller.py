@@ -7,7 +7,7 @@ import serial
 
 
 class GrblHALController:
-    """Thread-safe GRBL/grblHAL serial controller."""
+    """Thread-safe GRBL/grblHAL serial controller with line-response waiting."""
 
     def __init__(self) -> None:
         self.ser: Optional[serial.Serial] = None
@@ -35,6 +35,7 @@ class GrblHALController:
         self.send_realtime(b"\x18")  # soft reset
         time.sleep(0.3)
         self.flush_input()
+        self.clear_rx_queue()
 
     def disconnect(self) -> None:
         self.read_running = False
@@ -50,11 +51,19 @@ class GrblHALController:
                 pass
 
         self.ser = None
+        self.clear_rx_queue()
 
     def flush_input(self) -> None:
         if self.is_connected and self.ser is not None:
             with self.lock:
                 self.ser.reset_input_buffer()
+
+    def clear_rx_queue(self) -> None:
+        while True:
+            try:
+                self.rx_queue.get_nowait()
+            except queue.Empty:
+                break
 
     def write_line(self, line: str) -> None:
         if not self.is_connected or self.ser is None:
@@ -101,6 +110,67 @@ class GrblHALController:
                 break
 
         return lines
+
+    def wait_for_response(self, timeout: float = 5.0) -> str:
+        """
+        Wait for a controller response relevant to a streamed G-code line.
+
+        Returns the first terminal response:
+        - "ok"
+        - "error:..."
+        - "alarm:..."
+
+        Non-terminal messages like status reports or startup chatter are ignored.
+        """
+        deadline = time.time() + timeout
+
+        while time.time() < deadline:
+            remaining = max(0.0, deadline - time.time())
+            try:
+                line = self.rx_queue.get(timeout=min(0.1, remaining))
+            except queue.Empty:
+                continue
+
+            low = line.strip().lower()
+
+            if low == "ok":
+                return line
+
+            if low.startswith("error") or low.startswith("alarm"):
+                return line
+
+            # Ignore async chatter that should not ack a line:
+            # status reports, settings dumps, startup text, etc.
+            if (
+                low.startswith("<")
+                or low.startswith("[")
+                or "grbl" in low
+                or "grblhal" in low
+                or low.startswith("$")
+            ):
+                continue
+
+            # For anything unknown, keep waiting rather than falsely acking.
+            continue
+
+        raise TimeoutError("Timed out waiting for controller response")
+
+    def send_line_and_wait_ok(self, line: str, timeout: float = 5.0) -> str:
+        """
+        Send one G-code line and wait for its terminal response.
+
+        Returns:
+            "ok" or the returned error/alarm line.
+
+        Raises:
+            RuntimeError if not connected
+            TimeoutError if no terminal response arrives
+        """
+        if not self.is_connected or self.ser is None:
+            raise RuntimeError("Controller not connected")
+
+        self.write_line(line)
+        return self.wait_for_response(timeout=timeout)
 
     def _reader_loop(self) -> None:
         while self.read_running and self.is_connected and self.ser is not None:

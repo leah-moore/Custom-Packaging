@@ -21,7 +21,7 @@ if __name__ == "__main__" and __package__ is None:
 
 import math
 from pathlib import Path
-from shapely.geometry import Polygon, MultiPolygon, GeometryCollection, box
+from shapely.geometry import Polygon, MultiPolygon, GeometryCollection, box, Point
 from shapely.affinity import translate, rotate as shp_rotate
 
 from apps.gcode.machine_ops_planner import build_machine_ops
@@ -38,7 +38,6 @@ from .tabs.run_tab import build_run_tab
 from .tabs.preview_tab import build_preview_tab
 from .tabs.gcode_viewer_tab import build_gcode_viewer_tab
 from .tabs.vision_dxf_tab import build_vision_dxf_tab
-from .tabs.mesh_tab import build_mesh_tab
 from .tabs.slats_tab import build_slats_tab
 from .tabs.slats_cam_tab import build_slats_cam_tab
 from .tabs.diagnostics_tab import build_diagnostics_tab
@@ -75,14 +74,14 @@ SPINDLE_OFF_CMD = "M5"
 class TouchUI(tk.Tk):
     POLL_MS = 200
     RX_PROCESS_MS = 50
-    JOG_REPEAT_S = 0.12
+    JOG_REPEAT_S = 0.25
     JOG_HOLD_THRESHOLD_MS = 200
 
     def __init__(self):
         super().__init__()
         apply_theme(self)
 
-        self.title("grblHAL UI")
+        self.title("Precision Packaging Solutions")
         self.geometry("1024x600")
         self.minsize(1024, 600)
         self.configure(bg=BG)
@@ -119,6 +118,9 @@ class TouchUI(tk.Tk):
         self._jog_hold_started = False
         self._pending_jog_axis_moves = None
         self._pending_jog_button = None
+
+        self._jog_watchdog_after_id = None
+        self.active_jog_button = None
 
         # gcode / preview
         self.gcode_lines = []
@@ -166,15 +168,50 @@ class TouchUI(tk.Tk):
         self.photogrammetry_ax = None
         self.photogrammetry_canvas = None
 
-
         # vision / dxf / mesh / slats
         self.vision_images = []
+
+        # live USB camera state
+        self.camera_running = False
+        self.camera_thread = None
+        self.camera_capture = None
+        self._camera_frame = None
+
         # DXF viewer state
         self.dxf_dieline = None
         self.dxf_file_path = None
         self.dxf_canvas_zoom = 1.0
         self.dxf_canvas_pan_x = 0.0
         self.dxf_canvas_pan_y = 0.0
+        self._draw_dxf_preview()
+
+        # DXF transform / alignment state
+        self.dxf_tx_var = tk.StringVar(value="0.0")
+        self.dxf_ty_var = tk.StringVar(value="0.0")
+        self.dxf_rot_var = tk.StringVar(value="0.0")
+        self.dxf_scale_var = tk.StringVar(value="1.0")
+
+        # vision + DXF tab state
+        self.vision_dxf_view_mode = tk.StringVar(value="split")
+        self.vision_dxf_status_var = tk.StringVar(value="Idle")
+        self.vision_result_var = tk.StringVar(value="No run yet")
+        self.camera_info_var = tk.StringVar(value="Camera idle")
+        self.dxf_info_text = tk.StringVar(value="No DXF loaded")
+        self.dxf_canvas_zoom = 1.0
+        self.dxf_canvas_pan_x = 0.0
+        self.dxf_canvas_pan_y = 0.0
+        self._dxf_pan_last_x = None
+        self._dxf_pan_last_y = None
+
+        # camera / DXF widgets
+        self.camera_preview_canvas = None
+        self.dxf_preview_canvas = None
+        self.vision_dxf_content = None
+        self.vision_camera_panel = None
+        self.vision_dxf_panel = None
+        self._vision_dxf_view_buttons = {}
+
+        # mesh / slats state
         self.scan_mesh_path = None
         self.raw_mesh = None
         self.slats_data = None
@@ -200,6 +237,13 @@ class TouchUI(tk.Tk):
         self.machine_pos_a_text = tk.StringVar(value="--")
         self.machine_pos_b_text = tk.StringVar(value="--")
         self.machine_pos_c_text = tk.StringVar(value="--")
+
+        self.work_pos_x_text = tk.StringVar(value="--")
+        self.work_pos_y_text = tk.StringVar(value="--")
+        self.work_pos_z_text = tk.StringVar(value="--")
+        self.work_pos_a_text = tk.StringVar(value="--")
+        self.work_pos_b_text = tk.StringVar(value="--")
+        self.work_pos_c_text = tk.StringVar(value="--")
 
         # =========================
         # CONNECTION VARS
@@ -257,6 +301,11 @@ class TouchUI(tk.Tk):
         self.slat_height_var = tk.StringVar(value="20.0")
         self.show_mesh_overlay_var = tk.BooleanVar(value=True)
         self.slat_info_text = tk.StringVar(value="No slats generated")
+
+        self.drag_item_id = None
+        self.drag_boundary_index = None
+        self.drag_last_xy = None
+        self.drag_original_pose = None
 
         # =========================
         # SLATS CAM VARS
@@ -382,6 +431,103 @@ class TouchUI(tk.Tk):
     # =========================
     # SERIAL / MACHINE
     # =========================
+    
+    def _start_live_camera(self):
+        if self.camera_running:
+            return
+
+        import cv2
+
+        try:
+            # Try USB camera (index 0)
+            cap = cv2.VideoCapture(0)
+
+            if not cap.isOpened():
+                raise RuntimeError("Could not open camera (/dev/video0)")
+
+            self.camera_capture = cap
+            self.camera_running = True
+
+            if hasattr(self, "camera_info_var"):
+                self.camera_info_var.set("Camera running")
+
+            self._append_console("> Camera started")
+
+            def loop():
+                import time
+
+                while self.camera_running:
+                    ret, frame = cap.read()
+                    if not ret:
+                        continue
+
+                    self._camera_frame = frame
+
+                    # push update to UI thread
+                    self.after(0, self._update_camera_canvas)
+
+                    time.sleep(0.03)  # ~30 FPS
+
+            import threading
+            self.camera_thread = threading.Thread(target=loop, daemon=True)
+            self.camera_thread.start()
+
+        except Exception as exc:
+            if hasattr(self, "camera_info_var"):
+                self.camera_info_var.set("Camera error")
+
+            self._append_console(f"[CAM ERROR] {exc}")
+    
+    def _stop_live_camera(self):
+        self.camera_running = False
+
+        if self.camera_capture is not None:
+            try:
+                self.camera_capture.release()
+            except Exception:
+                pass
+
+        self.camera_capture = None
+
+        if hasattr(self, "camera_info_var"):
+            self.camera_info_var.set("Camera stopped")
+
+        self._append_console("> Camera stopped")
+
+
+    def _update_camera_canvas(self):
+        if self._camera_frame is None:
+            return
+
+        if not hasattr(self, "camera_preview_canvas") or self.camera_preview_canvas is None:
+            return
+
+        import cv2
+        from PIL import Image, ImageTk
+
+        frame = self._camera_frame
+
+        # BGR → RGB
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+        img = Image.fromarray(frame)
+
+        # resize to canvas
+        w = self.camera_preview_canvas.winfo_width()
+        h = self.camera_preview_canvas.winfo_height()
+
+        if w > 0 and h > 0:
+            img = img.resize((w, h))
+
+        tk_img = ImageTk.PhotoImage(img)
+
+        self.camera_preview_canvas.delete("all")
+        self.camera_preview_canvas.create_image(0, 0, anchor="nw", image=tk_img)
+
+        # KEEP REFERENCE (critical)
+        self.camera_preview_canvas.image = tk_img
+        
+    
     def _connect(self) -> None:
         port = self.port_var.get().strip()
         baud = self.baud_var.get().strip()
@@ -510,6 +656,8 @@ class TouchUI(tk.Tk):
             self.ctrl.send_realtime(b"!")
             self._append_console(">> [FORCE STOP] Sent Ctrl-X (3x) + Hold")
         self._append_console(">> All motion stopped\n")
+        if hasattr(self, "jog_status_var"):
+            self.jog_status_var.set("JOG: IDLE")
 
     # =========================
     # OUTPUTS
@@ -639,11 +787,19 @@ class TouchUI(tk.Tk):
         mode = (self.jog_mode_var.get() or "step").strip().lower()
 
         if mode == "continuous":
+            # TOGGLE behavior
+            if self.jogging or self.roller_jogging:
+                self._cancel_jog()
+                self._stop_roller_jog()
+                if self.ctrl.is_connected:
+                    self.ctrl.send_realtime(b"\x85")  # jog cancel
+                return
+
+            self.active_jog_button = btn
+            btn.config(bg="#FFBE6B")
+            # start jogging
             self._begin_continuous_jog(axis_moves)
-        else:
-            # STEP mode: do nothing on press
-            # actual single-step happens on release
-            pass
+            self._arm_jog_watchdog()
 
     def _begin_continuous_jog(self, axis_moves: dict) -> None:
         self._jog_hold_after_id = None
@@ -661,7 +817,10 @@ class TouchUI(tk.Tk):
         self._start_continuous_jog(axis_moves)
 
     def _on_jog_release(self, btn: tk.Button) -> None:
-        btn.config(bg="#D9D9D9")
+        mode = (self.jog_mode_var.get() or "step").strip().lower()
+
+        if mode != "continuous" or btn is not self.active_jog_button:
+            btn.config(bg="#D9D9D9")
 
         if self._jog_hold_after_id is not None:
             try:
@@ -674,29 +833,24 @@ class TouchUI(tk.Tk):
         mode = (self.jog_mode_var.get() or "step").strip().lower()
 
         if mode == "continuous":
-            if self._jog_hold_started:
-                if axis_moves is not None and set(axis_moves.keys()) == {"ROLLER"}:
-                    self._stop_roller_jog()
-                else:
-                    self._cancel_jog()
-                    if self.ctrl.is_connected:
-                        self.ctrl.send_realtime(b"!")
-        else:
-            # STEP mode: always do one step on release
-            if axis_moves is not None:
-                self._single_step_jog(axis_moves)
+            # do nothing on release (touchscreens unreliable)
+            pass
 
         self._jog_hold_started = False
         self._pending_jog_axis_moves = None
         self._pending_jog_button = None
 
     def _start_continuous_jog(self, axis_moves: dict) -> None:
+        
         if "ROLLER" in axis_moves:
             return
         if not self._safe_to_jog() or self.jogging:
             return
 
         self.jogging = True
+
+        axis_name = ", ".join(axis_moves.keys())
+        self.jog_status_var.set(f"JOGGING: {axis_name}+")
 
         def jog_loop() -> None:
             while self.jogging and self.ctrl.is_connected:
@@ -713,6 +867,64 @@ class TouchUI(tk.Tk):
 
     def _cancel_jog(self) -> None:
         self.jogging = False
+        self._stop_roller_jog()
+        self._clear_jog_watchdog()
+
+        if self.active_jog_button is not None:
+            try:
+                self.active_jog_button.config(bg="#D9D9D9")
+            except Exception:
+                pass
+            self.active_jog_button = None
+
+        if hasattr(self, "jog_status_var"):
+            self.jog_status_var.set("JOG: IDLE")
+
+        if self.ctrl.is_connected:
+            try:
+                self.ctrl.send_realtime(b"\x85")
+            except Exception:
+                pass
+
+    def _arm_jog_watchdog(self) -> None:
+        if self._jog_watchdog_after_id is not None:
+            try:
+                self.after_cancel(self._jog_watchdog_after_id)
+            except Exception:
+                pass
+
+        self._jog_watchdog_after_id = self.after(700, self._watchdog_stop_jog)
+
+    def _clear_jog_watchdog(self) -> None:
+        if self._jog_watchdog_after_id is not None:
+            try:
+                self.after_cancel(self._jog_watchdog_after_id)
+            except Exception:
+                pass
+            self._jog_watchdog_after_id = None
+
+    def _watchdog_stop_jog(self) -> None:
+        self._jog_watchdog_after_id = None
+        self._append_console("[JOG] watchdog stop")
+        self._cancel_jog()
+
+
+    def _set_controls_enabled(self, enabled: bool):
+        state = "normal" if enabled else "disabled"
+
+        # Jog buttons
+        for btn in getattr(self, "jog_buttons", []):
+            btn.config(state=state)
+
+        # Machine control buttons
+        for btn in getattr(self, "machine_buttons", []):
+            btn.config(state=state)
+
+        # Output buttons (optional if you track them)
+        for btn in getattr(self, "output_buttons", []):
+            btn.config(state=state)
+
+
 
     # =========================
     # ROLLER (PI-CONTROLLED)
@@ -1117,10 +1329,61 @@ class TouchUI(tk.Tk):
         self.photogrammetry_rot_z = 0.0
         self._draw_photogrammetry_mesh_preview()
 
-
     # =========================
     # GCODE / RUN
     # =========================
+
+    def _populate_gcode_table(self):
+        if not hasattr(self, "gcode_table_rows_frame") or self.gcode_table_rows_frame is None:
+            return
+
+        for child in self.gcode_table_rows_frame.winfo_children():
+            child.destroy()
+
+        self.gcode_row_frames = []
+        self.gcode_row_status_labels = []
+        self.gcode_row_code_labels = []
+
+        for line in self.gcode_lines:
+            row = tk.Frame(self.gcode_table_rows_frame, bg="#1e1e1e")
+            row.pack(fill="x", expand=True)
+
+            status_lbl = tk.Label(
+                row,
+                text="",
+                bg="#1e1e1e",
+                fg="#dcdcdc",
+                font=("Arial", 8, "bold"),
+                bd=1,
+                relief="solid",
+                width=8,
+                anchor="center",
+            )
+            status_lbl.pack(side="left", fill="y")
+
+            code_lbl = tk.Label(
+                row,
+                text=line,
+                bg="#1e1e1e",
+                fg="#dcdcdc",
+                font=("Courier New", 11),
+                bd=1,
+                relief="solid",
+                anchor="w",
+                justify="left",
+                padx=6,
+            )
+            code_lbl.pack(side="left", fill="x", expand=True)
+
+            self.gcode_row_frames.append(row)
+            self.gcode_row_status_labels.append(status_lbl)
+            self.gcode_row_code_labels.append(code_lbl)
+
+        if hasattr(self, "gcode_table_canvas") and self.gcode_table_canvas is not None:
+            self.gcode_table_canvas.update_idletasks()
+            self.gcode_table_canvas.configure(scrollregion=self.gcode_table_canvas.bbox("all"))
+
+
     def _load_gcode_file(self) -> None:
         path = filedialog.askopenfilename(
             title="Load G-code File",
@@ -1134,10 +1397,17 @@ class TouchUI(tk.Tk):
                 self.gcode_lines = f.read().splitlines()
 
             self.file_text.set(os.path.basename(path))
+
+            # --- existing text viewer ---
             if self.gcode_viewer is not None:
                 self.gcode_viewer.delete("1.0", "end")
                 self.gcode_viewer.insert("1.0", "\n".join(self.gcode_lines))
 
+            # --- NEW: populate 2-column G-code table ---
+            if hasattr(self, "_populate_gcode_table"):
+                self._populate_gcode_table()
+
+            # --- existing preview parsing ---
             self.gcode_segments, self.gcode_bounds = GCodeParser.parse_lines(self.gcode_lines)
             self.preview_total_time_s = float(self.gcode_bounds.get("total_time_s", 0.0))
             self.preview_estimated_time = self.preview_total_time_s
@@ -1158,8 +1428,55 @@ class TouchUI(tk.Tk):
                 self._refresh_preview_unified()
             except Exception:
                 pass
+
         except Exception as e:
             messagebox.showerror("Load Error", str(e))
+
+    def _load_gcode_from_string(self, gcode: str, display_name: str = "Generated G-code") -> None:
+        try:
+            self.gcode_lines = gcode.splitlines()
+            self.file_text.set(display_name)
+
+            # same viewer update path as file load
+            if self.gcode_viewer is not None:
+                self.gcode_viewer.delete("1.0", "end")
+                self.gcode_viewer.insert("1.0", "\n".join(self.gcode_lines))
+
+            # same table refresh path as file load
+            if hasattr(self, "_populate_gcode_table"):
+                self._populate_gcode_table()
+
+            # same preview parsing path as file load
+            self.gcode_segments, self.gcode_bounds = GCodeParser.parse_lines(self.gcode_lines)
+            self.preview_total_time_s = float(self.gcode_bounds.get("total_time_s", 0.0))
+            self.preview_estimated_time = self.preview_total_time_s
+            self.preview_elapsed_s = 0.0
+            self.preview_last_tick_s = None
+            self.preview_scrub_index = 0.0
+            self.preview_scrubber_var.set(0.0)
+
+            total_s = int(self.preview_total_time_s)
+            self.preview_time_var.set(
+                f"Time: 00:00/{total_s // 60:02d}:{total_s % 60:02d}"
+            )
+            self.preview_segment_var.set(f"Segments: 0/{len(self.gcode_segments)}")
+            self.job_progress_text.set(f"Job: loaded ({len(self.gcode_lines)} lines)")
+            self._append_console(f"> Loaded G-code into Run tab: {display_name}")
+
+            try:
+                self._refresh_preview_unified()
+            except Exception:
+                pass
+
+        except Exception as e:
+            messagebox.showerror("Load Error", str(e))
+
+    def _load_current_window_gcode(self) -> None:
+        try:
+            self._generate_current_window_gcode()
+        except Exception as exc:
+            messagebox.showerror("Load Error", str(exc))
+            self._append_console(f"[LOAD CURRENT WINDOW ERROR] {exc}")
 
     def _start_slats_job(self):
         if self.job_running:
@@ -1170,22 +1487,14 @@ class TouchUI(tk.Tk):
             return
 
         try:
-            # 👇 THIS comes from your slats CAM logic
-            toolpaths = self.slats_cam_toolpaths
+            ops = getattr(self, "slats_cam_continuous_ops", None)
 
-            if not toolpaths:
-                messagebox.showerror("Run Error", "No toolpaths available.")
+            if not ops:
+                messagebox.showerror(
+                    "Run Error",
+                    "No continuous job prepared. Click 'Prepare Continuous Job' first.",
+                )
                 return
-
-            from gantry.roll_feed_cam import build_roll_feed_ops, RollFeedGantry
-
-            gantry = RollFeedGantry(
-                feed_window_y=200.0,
-                gantry_width_x=300.0,
-                feed_clearance_y=20.0,
-            )
-
-            ops, _ = build_roll_feed_ops(toolpaths, gantry)
 
         except Exception as exc:
             messagebox.showerror("Run Error", f"Failed to build job: {exc}")
@@ -1219,6 +1528,92 @@ class TouchUI(tk.Tk):
         threading.Thread(target=worker, daemon=True).start()
         
 
+    def _pick_packed_slat(self, x, y):
+        _, to_world, _ = self._overview_view_transform()
+        wx, wy = to_world(x, y)
+        p = Point(wx, wy)
+
+        best_sid = None
+        best_area = None
+        for sid, item in self.packed_items.items():
+            geom = item["geom"]
+            try:
+                if geom.contains(p) or geom.buffer(1.5).contains(p):
+                    area = geom.area
+                    if best_area is None or area < best_area:
+                        best_area = area
+                        best_sid = sid
+            except Exception:
+                pass
+        return best_sid
+
+
+    def _pick_feed_boundary(self, canvas_x, canvas_y, tol_px=12):
+        if len(self.feed_windows) < 2:
+            return None
+
+        to_canvas, _, _ = self._overview_view_transform()
+        miny, maxy = self._sheet_y_bounds()
+
+        best_idx = None
+        best_dist = None
+        for j in range(len(self.feed_windows) - 1):
+            _idx, _x0, x1 = self.feed_windows[j]
+            hx, hy0 = to_canvas(x1, miny)
+            _hx, hy1 = to_canvas(x1, maxy)
+            hy_mid = 0.5 * (hy0 + hy1)
+
+            if canvas_y < min(hy0, hy1) - 20 or canvas_y > max(hy0, hy1) + 20:
+                continue
+
+            dist = min(
+                abs(canvas_x - hx),
+                ((canvas_x - hx) ** 2 + (canvas_y - hy_mid) ** 2) ** 0.5,
+            )
+            if dist <= tol_px and (best_dist is None or dist < best_dist):
+                best_dist = dist
+                best_idx = j
+
+        return best_idx
+
+
+    def _move_feed_boundary(self, boundary_index, new_x, min_window_width=20.0):
+        if boundary_index is None:
+            return
+        if not (0 <= boundary_index < len(self.feed_windows) - 1):
+            return
+        if self.sheet_mm is None or self.sheet_mm.is_empty:
+            return
+
+        max_window_len = float(self.slats_cam_feed_window_mm.get() or "200.0")
+        _left_idx, left_x0, _left_x1 = self.feed_windows[boundary_index]
+        _sheet_minx, _sheet_miny, sheet_maxx, _sheet_maxy = self.sheet_mm.bounds
+
+        lo = left_x0 + min_window_width
+        hi = min(left_x0 + max_window_len, sheet_maxx)
+        clamped_x = max(lo, min(hi, new_x))
+
+        new_windows = []
+        for j in range(boundary_index):
+            _idx, x0, x1 = self.feed_windows[j]
+            new_windows.append((j, x0, x1))
+
+        new_windows.append((boundary_index, left_x0, clamped_x))
+
+        x0 = clamped_x
+        idx = boundary_index + 1
+        while x0 < sheet_maxx - 1e-9:
+            x1 = min(x0 + max_window_len, sheet_maxx)
+            if x1 - x0 < 1e-6:
+                break
+            new_windows.append((idx, x0, x1))
+            x0 = x1
+            idx += 1
+
+        self.feed_windows = new_windows
+        self.active_window_index = min(self.active_window_index, len(self.feed_windows) - 1)
+        self._update_window_info()
+
     def _start_gcode_job(self) -> None:
         if self.job_running:
             return
@@ -1234,13 +1629,18 @@ class TouchUI(tk.Tk):
         self.job_stopping = False
         self.job_paused = False
         self.job_running = True
+        self.current_line_index = 0
         self.job_progress_text.set("Job: running")
         self._append_console("> Running raw G-code")
 
         def worker():
             try:
-                for line in self.gcode_lines:
+                for i, line in enumerate(self.gcode_lines):
                     if self.job_stopping:
+                        break
+
+                    if not self.ctrl.is_connected:
+                        self._append_console("[JOB ERROR] Lost connection to controller")
                         break
 
                     while self.job_paused and not self.job_stopping:
@@ -1250,13 +1650,42 @@ class TouchUI(tk.Tk):
                         break
 
                     line = line.strip()
+
                     if not line:
+                        self.after(0, lambda idx=i: self._set_gcode_line_status(idx, "SKIP"))
                         continue
 
-                    self.ctrl.write_line(line)
+                    self.current_line_index = i
+                    self.after(0, lambda idx=i: self._set_gcode_line_status(idx, "RUN"))
                     self._append_console(f">> {line}")
 
-                    time.sleep(0.01)
+                    try:
+                        reply = self.ctrl.send_line_and_wait_ok(line, timeout=10.0)
+                    except TimeoutError:
+                        self.after(0, lambda idx=i: self._set_gcode_line_status(idx, "TIMEOUT"))
+                        self._append_console("[JOB ERROR] Timeout waiting for OK")
+                        break
+                    except Exception as exc:
+                        self.after(0, lambda idx=i: self._set_gcode_line_status(idx, "ERR"))
+                        self._append_console(f"[JOB ERROR] {exc}")
+                        break
+
+                    low = reply.strip().lower()
+
+                    if low == "ok":
+                        self.after(0, lambda idx=i: self._set_gcode_line_status(idx, "OK"))
+                    elif low.startswith("alarm"):
+                        self.after(0, lambda idx=i: self._set_gcode_line_status(idx, "ERR"))
+                        self._append_console(f"[ALARM] {reply}")
+                        break
+                    elif low.startswith("error"):
+                        self.after(0, lambda idx=i: self._set_gcode_line_status(idx, "ERR"))
+                        self._append_console(f"[JOB ERROR] {reply}")
+                        break
+                    else:
+                        self.after(0, lambda idx=i: self._set_gcode_line_status(idx, "ERR"))
+                        self._append_console(f"[JOB ERROR] Unexpected reply: {reply}")
+                        break
 
                 if self.job_stopping:
                     self._append_console("> Job stopped")
@@ -1275,11 +1704,54 @@ class TouchUI(tk.Tk):
         self.job_thread = threading.Thread(target=worker, daemon=True)
         self.job_thread.start()
 
+
     def _pause_gcode_job(self) -> None:
         if self.job_running:
             self.job_paused = True
             self.ctrl.send_realtime(b"!")
             self._append_console(">> [JOB HOLD] !")
+
+    def _set_gcode_line_status(self, index: int, status: str):
+        if not hasattr(self, "gcode_row_status_labels"):
+            return
+        if index < 0 or index >= len(self.gcode_row_status_labels):
+            return
+
+        status_lbl = self.gcode_row_status_labels[index]
+        code_lbl = self.gcode_row_code_labels[index]
+
+        bg = "#1e1e1e"
+        fg = "#dcdcdc"
+
+        if status == "OK":
+            bg = "#1f3a1f"
+            fg = "#d8ffd8"
+        elif status == "RUN":
+            bg = "#1f2f4a"
+            fg = "#e6f0ff"
+        elif status == "ERR":
+            bg = "#4a1f1f"
+            fg = "#ffdede"
+        elif status == "TIMEOUT":
+            bg = "#4a331f"
+            fg = "#ffe7cc"
+        elif status == "SKIP":
+            bg = "#1e1e1e"
+            fg = "#888888"
+
+        status_lbl.config(text=status, bg=bg, fg=fg)
+        code_lbl.config(bg=bg)
+
+        if hasattr(self, "gcode_table_canvas") and self.gcode_table_canvas is not None:
+            row = self.gcode_row_frames[index]
+            self.gcode_table_canvas.update_idletasks()
+            self.gcode_table_canvas.yview_moveto(
+                max(
+                    0.0,
+                    row.winfo_y() / max(1, self.gcode_table_rows_frame.winfo_height())
+                )
+            )
+
 
     def _resume_gcode_job(self) -> None:
         if self.job_running:
@@ -1346,6 +1818,23 @@ class TouchUI(tk.Tk):
             ax.zaxis.pane.set_facecolor((0.07, 0.07, 0.07, 1.0))
         except Exception:
             pass
+
+    def _set_preview_dro_xyz(self, x, y, z, dx=0.0, dy=0.0):
+        if self.job_running:
+            return
+
+        # XYZ
+        self.work_pos_x_text.set(f"{x:.3f}")
+        self.work_pos_y_text.set(f"{y:.3f}")
+        self.work_pos_z_text.set(f"{z:.3f}")
+
+        # Blade (A or B)
+        angle = self._compute_blade_angle(dx, dy)
+
+        if self.preview_blade_axis == "A":
+            self.work_pos_a_text.set(f"{angle:.2f}")
+        elif self.preview_blade_axis == "B":
+            self.work_pos_b_text.set(f"{angle:.2f}")
 
     def _draw_toolpath_preview(self) -> None:
         canvas = getattr(self, "preview_canvas_2d", None) or getattr(self, "preview_canvas", None)
@@ -1776,6 +2265,18 @@ class TouchUI(tk.Tk):
             self.preview_animation_id = None
 
         self._preview_scrubber_moved("0")
+        self.current_tool_pos = [0.0, 0.0, 0.0]
+        self._set_preview_dro_xyz(0.0, 0.0, 0.0)
+
+    def _compute_blade_angle(self, dx, dy):
+        if abs(dx) < 1e-6 and abs(dy) < 1e-6:
+            return self._last_knife_angle
+
+        angle = math.degrees(math.atan2(dy, dx))
+        angle += self.preview_blade_offset_deg
+
+        self._last_knife_angle = angle
+        return angle
 
     def _preview_step_frame(self) -> None:
         if not self.gcode_segments:
@@ -1873,6 +2374,19 @@ class TouchUI(tk.Tk):
                 break
 
         self.current_line_index = min(idx, len(self.gcode_segments))
+        seg_idx = min(self.current_line_index, len(self.gcode_segments) - 1)
+        if seg_idx >= 0:
+            seg = self.gcode_segments[seg_idx]
+
+            ex, ey, ez = seg.end[0], seg.end[1], seg.end[2]
+
+            # compute direction
+            dx = ex - seg.start[0]
+            dy = ey - seg.start[1]
+
+            self.current_tool_pos = [ex, ey, ez]
+
+            self._set_preview_dro_xyz(ex, ey, ez, dx, dy)
 
         self.preview_time_var.set(
             f"Time: {self._format_mmss(self.preview_elapsed_s)}/{self._format_mmss(self.preview_total_time_s)}"
@@ -2097,6 +2611,37 @@ class TouchUI(tk.Tk):
                 fill="#FF8888",
                 justify="center",
             )
+
+
+    def _on_dxf_pan_start(self, event):
+        self._dxf_pan_last_x = event.x
+        self._dxf_pan_last_y = event.y
+
+    def _on_dxf_pan_move(self, event):
+        if self.dxf_preview_canvas is None:
+            return
+
+        last_x = getattr(self, "_dxf_pan_last_x", None)
+        last_y = getattr(self, "_dxf_pan_last_y", None)
+        if last_x is None or last_y is None:
+            self._dxf_pan_last_x = event.x
+            self._dxf_pan_last_y = event.y
+            return
+
+        dx = event.x - last_x
+        dy = event.y - last_y
+
+        self.dxf_canvas_pan_x += dx
+        self.dxf_canvas_pan_y += dy
+
+        self._dxf_pan_last_x = event.x
+        self._dxf_pan_last_y = event.y
+
+        self._draw_dxf_preview()
+
+    def _on_dxf_pan_end(self, event=None):
+        self._dxf_pan_last_x = None
+        self._dxf_pan_last_y = None
 
     # =========================
     # MESH
@@ -2628,15 +3173,21 @@ class TouchUI(tk.Tk):
             print("PACK ERROR:", e)
             return
 
+        record_by_sid = {record_id(r): r for r in self.all_slat_records}
+
         self.packed_items = {}
 
         for sid, geom, pose, ok, note in placements:
             if ok and geom is not None:
+                x, y, rot_deg = pose
+                rec = record_by_sid.get(sid)
+
                 self.packed_items[sid] = {
+                    "rec": rec,
+                    "x": x,
+                    "y": y,
+                    "rot": rot_deg,
                     "geom": geom,
-                    "x": pose[0],
-                    "y": pose[1],
-                    "rot": pose[2],
                     "note": note,
                 }
 
@@ -2789,10 +3340,13 @@ class TouchUI(tk.Tk):
 
 
     def _active_window(self):
-        if not getattr(self, "feed_windows", None):
+        windows = getattr(self, "feed_windows", None) or []
+        if not windows:
             return None
-        idx = max(0, min(self.active_window_index, len(self.feed_windows) - 1))
-        return self.feed_windows[idx]
+
+        i = max(0, min(self.active_window_index, len(windows) - 1))
+        self.active_window_index = i
+        return windows[i]
 
     def _prev_window(self):
         if not getattr(self, "feed_windows", None):
@@ -2817,56 +3371,166 @@ class TouchUI(tk.Tk):
         self.workspace_pan_y = 0.0
         self._redraw_all_views()
 
-    def _rotate_active(self, deg):
+    def _rotate_active(self, delta_deg):
         sid = self.active_packed_slat_id
         if not sid or sid not in self.packed_items:
+            self.slats_cam_status_var.set("Select a packed slat to rotate")
             return
 
         item = self.packed_items[sid]
-        rec = item["rec"]
-        new_rot = (self._safe_float(item.get("rot", 0.0), 0.0) + deg) % 360.0
-        geom = place_geom(self._record_geom(rec), item["x"], item["y"], new_rot)
+
+        new_rot = item["rot"] + delta_deg
+        candidate = place_geom(record_geom(item["rec"]), item["x"], item["y"], new_rot)
+
+        allowed = candidate is not None and not candidate.is_empty
+
+        if allowed and self.usable_region_mm is not None:
+            try:
+                allowed = candidate.buffer(1e-6).within(self.usable_region_mm)
+            except Exception:
+                allowed = False
+
+        if not allowed:
+            self.slats_cam_status_var.set("Rotation blocked: outside usable area")
+            return
+
+        gap = float(self.slats_cam_gap_mm_var.get() or "4.0")
+
+        for other_sid, other in self.packed_items.items():
+            if other_sid == sid:
+                continue
+
+            other_geom = other.get("geom")
+            if other_geom is None:
+                continue
+
+            try:
+                if candidate.buffer(gap).intersects(other_geom):
+                    self.slats_cam_status_var.set("Rotation blocked: overlaps another slat")
+                    return
+            except Exception:
+                pass
 
         item["rot"] = new_rot
-        item["geom"] = geom
+        item["geom"] = candidate
+        self.slats_cam_status_var.set(f"Rotated {sid} to {new_rot:.0f}°")
         self._redraw_all_views()
 
     def _on_workspace_click(self, event):
-        sid = self._hit_test_packed_item(event.x, event.y)
+        # 1️⃣ try boundary first
+        boundary_index = self._pick_feed_boundary(event.x, event.y)
+        if boundary_index is not None:
+            self.drag_boundary_index = boundary_index
+            self.drag_item_id = None
+            self.drag_last_xy = (event.x, event.y)
+            self.drag_original_pose = None
+            self._redraw_all_views()
+            return
+
+        # 2️⃣ slat selection
+        sid = self._pick_packed_slat(event.x, event.y)
+
         self.active_packed_slat_id = sid
         self.drag_item_id = sid
+        self.drag_boundary_index = None
         self.drag_last_xy = (event.x, event.y)
+
         if sid and sid in self.packed_items:
             item = self.packed_items[sid]
-            self.drag_original_pose = (item["x"], item["y"], item.get("rot", 0.0))
+            self.drag_original_pose = (item["x"], item["y"], item["rot"], item["geom"])
         else:
             self.drag_original_pose = None
+
         self._redraw_all_views()
 
     def _on_workspace_drag(self, event):
-        if not self.drag_item_id or self.drag_item_id not in self.packed_items or self.drag_last_xy is None:
+        # 🔴 boundary drag
+        if self.drag_boundary_index is not None:
+            _, to_world, _ = self._overview_view_transform()
+            wx, _ = to_world(event.x, event.y)
+
+            self._move_feed_boundary(self.drag_boundary_index, wx)
+            self.drag_last_xy = (event.x, event.y)
+            self._redraw_all_views()
             return
 
-        last_x, last_y = self.drag_last_xy
-        dx_px = event.x - last_x
-        dy_px = event.y - last_y
+        # 🔵 slat drag
+        if not self.drag_item_id or self.drag_item_id not in self.packed_items:
+            return
 
-        mm_per_px = getattr(self, "_workspace_mm_per_px", 1.0)
-        dx = dx_px * mm_per_px
-        dy = -dy_px * mm_per_px
+        sid = self.drag_item_id
+        _, to_world, _ = self._overview_view_transform()
 
-        item = self.packed_items[self.drag_item_id]
-        item["x"] += dx
-        item["y"] += dy
-        item["geom"] = place_geom(self._record_geom(item["rec"]), item["x"], item["y"], item.get("rot", 0.0))
+        wx0, wy0 = to_world(*self.drag_last_xy)
+        wx1, wy1 = to_world(event.x, event.y)
+
+        dx = wx1 - wx0
+        dy = wy1 - wy0
+
+        item = self.packed_items[sid]
+
+        new_x = item["x"] + dx
+        new_y = item["y"] + dy
+
+        candidate = place_geom(record_geom(item["rec"]), new_x, new_y, item["rot"])
+
+        if candidate and not candidate.is_empty:
+            item["x"] = new_x
+            item["y"] = new_y
+            item["geom"] = candidate
 
         self.drag_last_xy = (event.x, event.y)
         self._redraw_all_views()
 
     def _on_workspace_release(self, event):
+        if self.drag_item_id and self.drag_item_id in self.packed_items:
+            sid = self.drag_item_id
+            item = self.packed_items[sid]
+            candidate = item.get("geom")
+
+            allowed = candidate is not None and not candidate.is_empty
+
+            # ✅ region constraint
+            if allowed and self.usable_region_mm is not None:
+                try:
+                    allowed = candidate.buffer(1e-6).within(self.usable_region_mm)
+                except Exception:
+                    allowed = False
+
+            # ✅ collision constraint
+            if allowed:
+                gap = float(self.slats_cam_gap_mm_var.get() or "4.0")
+
+                for other_sid, other in self.packed_items.items():
+                    if other_sid == sid:
+                        continue
+
+                    other_geom = other.get("geom")
+                    if other_geom is None:
+                        continue
+
+                    try:
+                        if candidate.buffer(gap).intersects(other_geom):
+                            allowed = False
+                            break
+                    except Exception:
+                        pass
+
+            # ❌ revert if invalid
+            if not allowed and self.drag_original_pose:
+                ox, oy, orot, ogeom = self.drag_original_pose
+                item["x"] = ox
+                item["y"] = oy
+                item["rot"] = orot
+                item["geom"] = ogeom
+
         self.drag_item_id = None
+        self.drag_boundary_index = None
         self.drag_last_xy = None
         self.drag_original_pose = None
+
+        self._redraw_all_views()
+
 
     def _on_workspace_pan_start(self, event):
         self._pan_start = (event.x, event.y)
@@ -2987,173 +3651,6 @@ class TouchUI(tk.Tk):
                         width=width,
                         tags=tags,
                     )
-
-    def _current_workspace_bounds(self):
-        geoms = []
-
-        if getattr(self, "sheet_mm", None) is not None and not self.sheet_mm.is_empty:
-            geoms.append(self.sheet_mm)
-
-        for item in getattr(self, "packed_items", {}).values():
-            g = item.get("geom")
-            if g is not None and not g.is_empty:
-                geoms.append(g)
-
-        if not geoms:
-            return (0.0, 0.0, 300.0, 200.0)
-
-        bx0 = min(g.bounds[0] for g in geoms)
-        by0 = min(g.bounds[1] for g in geoms)
-        bx1 = max(g.bounds[2] for g in geoms)
-        by1 = max(g.bounds[3] for g in geoms)
-
-        pad = 20.0
-        return (bx0 - pad, by0 - pad, bx1 + pad, by1 + pad)
-
-    def _hit_test_packed_item(self, cx, cy):
-        canvas = getattr(self, "workspace_canvas", None)
-        if canvas is None:
-            return None
-
-        canvas.update_idletasks()
-
-        cw = max(canvas.winfo_width(), 150)
-        ch = max(canvas.winfo_height(), 95)
-        bounds = self._current_workspace_bounds()
-
-        hit_sid = None
-        for sid, item in self.packed_items.items():
-            geom = item.get("geom")
-            if geom is None or geom.is_empty:
-                continue
-
-            bx0, by0, bx1, by1 = geom.bounds
-            x0, y1 = self._world_to_workspace_canvas(bx0, by0, bounds, cw, ch)
-            x1, y0 = self._world_to_workspace_canvas(bx1, by1, bounds, cw, ch)
-
-            left = min(x0, x1)
-            right = max(x0, x1)
-            top = min(y0, y1)
-            bottom = max(y0, y1)
-
-            if left <= cx <= right and top <= cy <= bottom:
-                hit_sid = sid
-
-        return hit_sid
-
-    def _redraw_all_views(self):
-        self._draw_workspace_overview()
-        self._draw_active_window()
-
-    def _draw_workspace_overview(self):
-        canvas = getattr(self, "workspace_canvas", None)
-        if canvas is None:
-            return
-
-        canvas.delete("all")
-        cw = max(canvas.winfo_width(), 10)
-        ch = max(canvas.winfo_height(), 10)
-
-        bounds = self._current_workspace_bounds()
-
-        def map_fn(x, y):
-            return self._world_to_workspace_canvas(x, y, bounds, cw, ch)
-
-        if getattr(self, "sheet_mm", None) is not None and not self.sheet_mm.is_empty:
-            self._draw_geom_on_canvas(canvas, self.sheet_mm, map_fn, fill="#1B1B1B", outline="#888888", width=2)
-
-        active_window = self._active_window()
-        if active_window is not None and self.sheet_mm is not None:
-            _, x0, x1 = active_window
-            wy0 = self.sheet_mm.bounds[1]
-            wy1 = self.sheet_mm.bounds[3]
-            win_geom = box(x0, wy0, x1, wy1)
-            self._draw_geom_on_canvas(canvas, win_geom, map_fn, fill="", outline="#FFD54A", width=3)
-
-        for sid, item in self.packed_items.items():
-            geom = item.get("geom")
-            if geom is None or geom.is_empty:
-                continue
-
-            outline = "#00E5FF" if sid == self.active_packed_slat_id else "#FFFFFF"
-            fill = "#3A7BD5" if sid == self.active_packed_slat_id else "#4A90E2"
-            self._draw_geom_on_canvas(canvas, geom, map_fn, fill=fill, outline=outline, width=2)
-
-            bx0, by0, bx1, by1 = geom.bounds
-            tx, ty = map_fn((bx0 + bx1) * 0.5, (by0 + by1) * 0.5)
-            canvas.create_text(
-                tx, ty,
-                text=sid,
-                fill="#FFFFFF",
-                font=("Arial", 8, "bold"),
-            )
-
-    def _draw_active_window(self):
-        canvas = getattr(self, "window_canvas", None)
-        if canvas is None:
-            return
-
-        canvas.delete("all")
-        cw = max(canvas.winfo_width(), 10)
-        ch = max(canvas.winfo_height(), 10)
-
-        active_window = self._active_window()
-        if active_window is None:
-            if hasattr(self, "window_info_var"):
-                self.window_info_var.set("Window: none")
-            canvas.create_text(
-                cw / 2, ch / 2,
-                text="No feed window",
-                fill="#AAAAAA",
-                font=("Arial", 14),
-            )
-            return
-
-        idx, x0, x1 = active_window
-        if self.sheet_mm is not None and not self.sheet_mm.is_empty:
-            y0 = self.sheet_mm.bounds[1]
-            y1 = self.sheet_mm.bounds[3]
-        else:
-            y0, y1 = 0.0, self._safe_float(getattr(self, "slats_cam_cardboard_width_mm", None).get() if hasattr(self, "slats_cam_cardboard_width_mm") else 300.0, 300.0)
-
-        window_bounds = (x0, y0, x1, y1)
-
-        def map_fn(x, y):
-            return self._world_to_window_canvas(x, y, window_bounds, cw, ch)
-
-        win_geom = box(x0, y0, x1, y1)
-        self._draw_geom_on_canvas(canvas, win_geom, map_fn, fill="#1B1B1B", outline="#FFD54A", width=2)
-
-        count = 0
-        for sid, item in self.packed_items.items():
-            geom = item.get("geom")
-            if geom is None or geom.is_empty:
-                continue
-
-            gb = geom.bounds
-            if gb[2] < x0 or gb[0] > x1:
-                continue
-
-            outline = "#00E5FF" if sid == self.active_packed_slat_id else "#FFFFFF"
-            fill = "#3A7BD5" if sid == self.active_packed_slat_id else "#4A90E2"
-            self._draw_geom_on_canvas(canvas, geom, map_fn, fill=fill, outline=outline, width=2)
-
-            bx0, by0, bx1, by1 = geom.bounds
-            tx, ty = map_fn((bx0 + bx1) * 0.5, (by0 + by1) * 0.5)
-            canvas.create_text(
-                tx, ty,
-                text=sid,
-                fill="#FFFFFF",
-                font=("Arial", 8, "bold"),
-            )
-            count += 1
-
-        if hasattr(self, "window_info_var"):
-            self.window_info_var.set(
-                f"Window {idx + 1}\n"
-                f"x=[{x0:.1f}, {x1:.1f}] mm\n"
-                f"parts: {count}"
-            )
 
     def _generate_gcode(self) -> None:
         count = len(self.packed_items)
@@ -3406,7 +3903,6 @@ class TouchUI(tk.Tk):
             else:
                 canvas.create_line(pts, fill=outline, width=width, tags=tags)
 
-
     def _draw_feed_windows_on_workspace(self, to_canvas):
         if not getattr(self, "feed_windows", None):
             return
@@ -3414,6 +3910,9 @@ class TouchUI(tk.Tk):
         c = self.workspace_canvas
         miny, maxy = self._sheet_y_bounds()
 
+        # -------------------------
+        # EXISTING: draw windows
+        # -------------------------
         for j, (idx, x0, x1) in enumerate(self.feed_windows):
             active = j == self.active_window_index
             color = "#FFD54A" if active else "#4A7BFF"
@@ -3427,12 +3926,34 @@ class TouchUI(tk.Tk):
             midx = 0.5 * (x0 + x1)
             lx, ly = to_canvas(midx, maxy + 34.0)
             c.create_text(
-                lx,
-                ly,
+                lx, ly,
                 text=f"Window {idx}",
                 fill=color,
                 anchor="n",
                 font=("Arial", 10, "bold"),
+            )
+
+        # -------------------------
+        # NEW: draw boundary handles
+        # -------------------------
+        for j in range(len(self.feed_windows) - 1):
+            _idx, _x0, boundary_x = self.feed_windows[j]
+
+            active_boundary = (getattr(self, "drag_boundary_index", None) == j)
+
+            hx, hy0 = to_canvas(boundary_x, miny)
+            _hx, hy1 = to_canvas(boundary_x, maxy)
+            hy = 0.5 * (hy0 + hy1)
+
+            r = 7 if active_boundary else 6
+            fill = "#FFD54A" if active_boundary else "#FFFFFF"
+
+            c.create_oval(
+                hx - r, hy - r,
+                hx + r, hy + r,
+                fill=fill,
+                outline="#222222",
+                width=2,
             )
 
 
@@ -3595,14 +4116,9 @@ class TouchUI(tk.Tk):
 
 
     def _redraw_all_views(self):
-        if hasattr(self, "workspace_canvas") and self.workspace_canvas is not None:
-            self._redraw_workspace()
-        if hasattr(self, "window_canvas") and self.window_canvas is not None:
-            self._redraw_window_preview()
-        if hasattr(self, "_update_window_info"):
-            self._update_window_info()
+        self._redraw_workspace()
+        self._redraw_window_preview()
             
-
 
     def _toggle_slat_selection(self, sid):
         if sid in self.selected_slat_ids:
@@ -3612,6 +4128,339 @@ class TouchUI(tk.Tk):
 
         print("selected:", self.selected_slat_ids)  # 👈 DEBUG
         self._refresh_library_selection_styles()
+
+
+    def _use_blank_sheet(self):
+        try:
+            cardboard_width_mm = float(self.slats_cam_cardboard_width_mm.get() or "300.0")
+            feed_window_len = float(self.slats_cam_feed_window_mm.get() or "200.0")
+            edge_margin_mm = float(self.slats_cam_edge_margin_mm.get() or "5.0")
+
+            length_mm = max(feed_window_len * 5.0, feed_window_len + 1.0)
+            sheet_mm = box(
+                -feed_window_len / 2.0,
+                -cardboard_width_mm / 2.0,
+                -feed_window_len / 2.0 + length_mm,
+                cardboard_width_mm / 2.0,
+            )
+
+            usable_region_mm = sheet_mm.buffer(-edge_margin_mm)
+            if usable_region_mm is None or usable_region_mm.is_empty:
+                usable_region_mm = sheet_mm
+
+            self.slats_cam_dxf_path = None
+            self.sheet_raw = None
+            self.holes_raw = []
+            self.sheet_mm = sheet_mm
+            self.holes_mm = []
+            self.usable_region_mm = usable_region_mm
+            self.gantry_width_x_var.set(f"{cardboard_width_mm:.3f}")
+            self.feed_window_y_var.set(f"{feed_window_len:.3f}")
+            self._rebuild_feed_windows()
+
+            self.slats_cam_status_var.set("Blank sheet ready")
+            self._fit_workspace()
+        except Exception as e:
+            messagebox.showerror("Blank Sheet Error", str(e))
+
+
+    def _use_vision_dxf_for_slats_cam(self):
+        if not getattr(self, "dxf_file_path", None):
+            self.slats_cam_status_var.set("No Vision DXF loaded")
+            self._append_console("> No DXF loaded in Vision + DXF tab")
+            return
+
+        try:
+            self.slats_cam_dxf_path = Path(self.dxf_file_path)
+
+            polys = fidxf.load_closed_polygons_from_dxf(self.slats_cam_dxf_path)
+            min_sheet_area = float(self.slats_cam_min_sheet_area_var.get() or "50000.0")
+            sheet_index = int(self.slats_cam_sheet_index_var.get() or "0")
+
+            sheets = fidxf.classify_sheet_candidates(polys, min_sheet_area=min_sheet_area)
+            if sheet_index >= len(sheets):
+                raise IndexError(
+                    f"sheet_index={sheet_index} but only {len(sheets)} sheet candidates found"
+                )
+
+            sheet_raw, holes_raw = sheets[sheet_index]
+
+            cardboard_width_mm = float(self.slats_cam_cardboard_width_mm.get() or "300.0")
+            feed_window_len = float(self.slats_cam_feed_window_mm.get() or "200.0")
+            edge_margin_mm = float(self.slats_cam_edge_margin_mm.get() or "5.0")
+            cut_clearance_mm = float(self.slats_cam_cut_clearance_mm.get() or "1.0")
+
+            # same helper flow as normal CAM DXF load
+            self.sheet_raw = sheet_raw
+            self.holes_raw = holes_raw
+
+            self.sheet_mm = fidxf.normalize_sheet_to_cardboard_width(sheet_raw, cardboard_width_mm)
+            self.holes_mm = [
+                fidxf.normalize_sheet_to_cardboard_width(h, cardboard_width_mm)
+                for h in holes_raw
+            ]
+
+            usable = self.sheet_mm.buffer(-edge_margin_mm)
+            if usable is None or usable.is_empty:
+                usable = self.sheet_mm
+
+            if self.holes_mm:
+                try:
+                    usable = usable.difference(unary_union([h.buffer(cut_clearance_mm) for h in self.holes_mm]))
+                except Exception:
+                    pass
+
+            self.usable_region_mm = usable
+            self.gantry_width_x_var.set(f"{cardboard_width_mm:.3f}")
+            self.feed_window_y_var.set(f"{feed_window_len:.3f}")
+            self._rebuild_feed_windows()
+
+            name = self.slats_cam_dxf_path.name
+            self.slats_cam_status_var.set(f"Using Vision DXF: {name}")
+            self._append_console(f"> Linked Vision + DXF file to Slats CAM: {name}")
+            self._fit_workspace()
+
+        except Exception as exc:
+            messagebox.showerror("Vision DXF Link Error", str(exc))
+            self.slats_cam_status_var.set("Vision DXF link error")
+
+
+    def _use_photogrammetry_mesh_for_slats_cam(self):
+        if not getattr(self, "photogrammetry_mesh_path", None):
+            self.slats_cam_status_var.set("No photogrammetry mesh loaded")
+            self._append_console("> No mesh loaded in Photogrammetry tab")
+            return
+
+        p = Path(self.photogrammetry_mesh_path)
+        self.slats_cam_mesh_path = p
+        self.slats_cam_stl_path = p   # legacy alias used by CAM generator
+
+        if hasattr(self, "slats_cam_stl_path_var"):
+            self.slats_cam_stl_path_var.set(p.name)
+
+        self.slats_cam_slats_info_var.set(f"Mesh linked: {p.name}")
+        self.slats_cam_status_var.set("Using photogrammetry mesh")
+        self._append_console(f"> Linked photogrammetry mesh to Slats CAM: {p.name}")
+
+
+    def _use_slats_tab_setup_for_slats_cam(self):
+        mesh_path = getattr(self, "scan_mesh_path", None) or getattr(self, "photogrammetry_mesh_path", None)
+        if not mesh_path:
+            self.slats_cam_status_var.set("No Slats-tab mesh available")
+            self._append_console("> No mesh available from Slats tab")
+            return
+
+        try:
+            xy = int(float(self.n_xy_var.get()))
+            xz = int(float(self.n_xz_var.get()))
+        except Exception:
+            self.slats_cam_status_var.set("Invalid Slats-tab counts")
+            self._append_console("> Invalid XY/XZ counts in Slats tab")
+            return
+
+        p = Path(mesh_path)
+        self.slats_cam_mesh_path = p
+        self.slats_cam_stl_path = p
+        self.xy_count_var.set(str(xy))
+        self.xz_count_var.set(str(xz))
+
+        if hasattr(self, "slats_cam_stl_path_var"):
+            self.slats_cam_stl_path_var.set(p.name)
+
+        # CAM cannot directly reuse self.slats_data; it needs full CAM records.
+        self.all_slat_records = generate_slats(self.slats_cam_stl_path, xy, xz)
+        self.selected_slat_ids = set()
+        self.packed_items = {}
+        self.active_packed_slat_id = None
+
+        self.slats_cam_slats_info_var.set(
+            f"{len(self.all_slat_records)} slats linked from Slats tab"
+        )
+
+        self._rebuild_library_tiles()
+        self._update_selected_count()
+        self.slats_cam_status_var.set("Using Slats tab mesh + counts")
+        self._append_console(
+            f"> Linked Slats tab setup to Slats CAM: {p.name} | XY={xy} XZ={xz}"
+        )
+
+    def _generate_current_window_gcode(self):
+        try:
+            from slat_toolpaths import geometry_to_knife_segments, chain_segments
+            from gcode.emit_gcode import emit_gcode
+            from apps.gcode.machine_ops_types import (
+                RapidMove, ToolDown, ToolUp, CutPath, PivotAction
+            )
+            from gcode.emit_gcode import get_angle, angle_diff_deg
+
+            window = self._active_window()
+            if window is None:
+                messagebox.showerror("G-code Error", "No active window.")
+                return
+
+            if not self.packed_items:
+                messagebox.showerror("G-code Error", "No packed slats.")
+                return
+
+            # -----------------------------------------
+            # 1) collect window geometry ONLY
+            # -----------------------------------------
+            machine_geoms = []
+
+            for item in self.packed_items.values():
+                geom = item.get("geom")
+                if geom is None or geom.is_empty:
+                    continue
+
+                g_clip = self._clip_geom_to_window(geom, window)
+                if g_clip is None or g_clip.is_empty:
+                    continue
+
+                g_local = self._material_to_machine_geom(g_clip, window)
+                if g_local is None or g_local.is_empty:
+                    continue
+
+                machine_geoms.append(g_local)
+
+            if not machine_geoms:
+                messagebox.showwarning("No geometry", "Nothing in this window.")
+                return
+
+            # -----------------------------------------
+            # 2) geometry → toolpaths
+            # -----------------------------------------
+            knife_segments = []
+            for geom in machine_geoms:
+                knife_segments.extend(geometry_to_knife_segments(geom))
+
+            knife_paths = chain_segments(knife_segments)
+
+            toolpaths = {
+                "knife": knife_paths,
+                "crease": [],
+            }
+
+            # -----------------------------------------
+            # 3) single-window ops (from run_slats.py)
+            # -----------------------------------------
+            PIVOT_ANGLE_THRESHOLD = 10.0
+            ops = []
+            last_angle = None
+
+            for path in toolpaths["knife"]:
+                if not path or len(path) < 2:
+                    continue
+
+                angle = get_angle(path[0], path[1])
+
+                if last_angle is None or abs(angle_diff_deg(angle, last_angle)) > PIVOT_ANGLE_THRESHOLD:
+                    ops.append(PivotAction(tool="knife", angle=angle))
+
+                ops.append(RapidMove(to=path[0]))
+                ops.append(ToolDown(tool="knife"))
+                ops.append(CutPath(path=path))
+                ops.append(ToolUp())
+
+                last_angle = angle
+
+            # -----------------------------------------
+            # 4) emit + load
+            # -----------------------------------------
+            gantry_h = float(self.slats_cam_feed_window_mm.get() or "200.0")
+
+            gcode = emit_gcode(ops, feed_window_y=gantry_h)
+
+            idx, x0, x1 = window
+            self._load_gcode_from_string(gcode, display_name=f"Window {idx+1:02d}")
+
+            self._append_console(
+                f"> Window {idx+1} G-code | parts={len(machine_geoms)} | paths={len(knife_paths)}"
+            )
+
+        except Exception as exc:
+            messagebox.showerror("G-code Error", str(exc))
+            self._append_console(f"[GCODE ERROR] {exc}")
+
+    def _prepare_continuous_job(self):
+        try:
+            if not getattr(self, "packed_items", None):
+                messagebox.showerror("G-code Error", "No packed slats to generate.")
+                return
+
+            # -----------------------------------------
+            # 1) build FULL geometry (no window clipping)
+            # -----------------------------------------
+            from slat_toolpaths import geometry_to_knife_segments, chain_segments
+
+            world_geoms = []
+            for item in self.packed_items.values():
+                geom = item.get("geom")
+                if geom is None or geom.is_empty:
+                    continue
+                world_geoms.append(geom)
+
+            if not world_geoms:
+                messagebox.showerror("G-code Error", "No geometry found.")
+                return
+
+            # -----------------------------------------
+            # 2) geometry → toolpaths (WORLD space)
+            # -----------------------------------------
+            knife_segments = []
+            for geom in world_geoms:
+                knife_segments.extend(geometry_to_knife_segments(geom))
+
+            knife_paths = chain_segments(knife_segments)
+
+            toolpaths = {
+                "knife": knife_paths,
+                "crease": [],
+            }
+
+            # -----------------------------------------
+            # 3) build roll-feed ops
+            # -----------------------------------------
+            from gantry.roll_feed_cam import RollFeedGantry, build_roll_feed_ops
+
+            gantry = RollFeedGantry(
+                feed_window_y=float(self.slats_cam_feed_window_mm.get() or "200.0"),
+                gantry_width_x=float(self.slats_cam_cardboard_width_mm.get() or "300.0"),
+                feed_clearance_y=20.0,
+            )
+
+            ops, feed_positions = build_roll_feed_ops(toolpaths, gantry)
+
+            # -----------------------------------------
+            # 4) store job (IMPORTANT)
+            # -----------------------------------------
+            self.slats_cam_toolpaths = toolpaths
+            self.slats_cam_continuous_ops = ops
+            self.slats_cam_feed_positions = feed_positions
+
+            # -----------------------------------------
+            # 5) UI feedback
+            # -----------------------------------------
+            self.slats_cam_status_var.set("Continuous job prepared")
+            self._append_console(
+                f"> Continuous job ready | paths={len(toolpaths['knife'])} | ops={len(ops)}"
+            )
+
+        except Exception as exc:
+            messagebox.showerror("Continuous Job Error", str(exc))
+            self._append_console(f"[CONTINUOUS ERROR] {exc}")
+
+    def _generate_continuous_gcode(self):
+        try:
+            if not getattr(self, "packed_items", None):
+                messagebox.showerror("G-code Error", "No packed slats to generate.")
+                return
+
+            self.slats_cam_status_var.set("Continuous G-code not implemented yet")
+            self._append_console("> Continuous all-windows G-code not implemented yet")
+
+        except Exception as exc:
+            messagebox.showerror("G-code Error", str(exc))
+            self._append_console(f"[GCODE ERROR] {exc}")
 
 
     # =========================
@@ -3669,7 +4518,21 @@ class TouchUI(tk.Tk):
                 self._update_preview_from_machine_pos()
 
             elif key == "WPos":
+                coords = [c.strip() for c in val.split(",")]
                 self.work_pos_text.set(f"WPos: {val}")
+
+                if len(coords) > 0:
+                    self.work_pos_x_text.set(coords[0])
+                if len(coords) > 1:
+                    self.work_pos_y_text.set(coords[1])
+                if len(coords) > 2:
+                    self.work_pos_z_text.set(coords[2])
+                if len(coords) > 3:
+                    self.work_pos_a_text.set(coords[3])
+                if len(coords) > 4:
+                    self.work_pos_b_text.set(coords[4])
+                if len(coords) > 5:
+                    self.work_pos_c_text.set(coords[5])
 
             elif key == "Pn":
                 saw_pn = True

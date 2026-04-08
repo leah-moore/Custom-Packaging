@@ -1,10 +1,12 @@
 # slats_cam_logic.py
 
 from shapely.geometry import Polygon, MultiPolygon, GeometryCollection, box
-from shapely.affinity import translate
+from shapely.affinity import translate, rotate as shp_rotate
 from shapely.ops import unary_union, transform as geom_transform
 
 from apps.integration import filler_integration_dxf as fidxf
+
+
 # =========================================================
 # RECORD HELPERS
 # =========================================================
@@ -17,7 +19,6 @@ def rec_get(rec, key, default=None):
 def record_geom(rec):
     # Try the "final" geometry first
     g = rec_get(rec, "geom")
-
     if g is not None:
         return g
 
@@ -99,9 +100,45 @@ def place_geom(geom, x, y, rot_deg):
         return fidxf.place_geom(geom, x, y, rot_deg)
     except Exception:
         g = normalize_part(geom)
-        if g is None:
+        if g is None or g.is_empty:
             return None
+
+        # rotate around normalized part origin so 0,0 stays as the placement anchor
+        if rot_deg:
+            g = shp_rotate(g, rot_deg, origin=(0, 0), use_radians=False)
+
+            # after rotation, re-normalize to keep top-left / min corner anchored cleanly
+            bx0, by0, _, _ = g.bounds
+            g = translate(g, xoff=-bx0, yoff=-by0)
+
         return translate(g, xoff=x, yoff=y)
+
+
+def geom_collides(test_geom, other_geoms, tol=1e-6):
+    if test_geom is None or test_geom.is_empty:
+        return True
+
+    for other in other_geoms:
+        if other is None or other.is_empty:
+            continue
+        try:
+            if test_geom.intersects(other) and test_geom.intersection(other).area > tol:
+                return True
+        except Exception:
+            if test_geom.intersects(other):
+                return True
+    return False
+
+
+def geom_inside_region(test_geom, region):
+    if test_geom is None or test_geom.is_empty:
+        return False
+    if region is None or region.is_empty:
+        return False
+    try:
+        return region.buffer(1e-6).contains(test_geom) or region.buffer(1e-6).covers(test_geom)
+    except Exception:
+        return region.contains(test_geom) or region.covers(test_geom)
 
 
 # =========================================================
@@ -113,7 +150,6 @@ def generate_slats(stl_path, xy_count, xz_count):
         n_xy=xy_count,
         n_xz=xz_count,
     )
-
     return filter_records_by_requested_counts(raw, xy_count, xz_count)
 
 
@@ -144,7 +180,7 @@ def filter_records_by_requested_counts(records, xy_count, xz_count):
 
 
 # =========================================================
-# PREVIEW DRAW (CRITICAL)
+# PREVIEW DRAW
 # =========================================================
 def draw_library_preview(canvas, rec):
     canvas.delete("all")
@@ -170,9 +206,9 @@ def draw_library_preview(canvas, rec):
 
     for poly in iter_polys(geom):
         pts = []
-        for x, y in poly.exterior.coords:
-            cx = ox + (x - bx0) * s
-            cy = ch - (oy + (y - by0) * s)
+        for x0, y0 in poly.exterior.coords:
+            cx = ox + (x0 - bx0) * s
+            cy = ch - (oy + (y0 - by0) * s)
             pts.extend([cx, cy])
 
         canvas.create_polygon(pts, outline=outline, fill="", width=1)

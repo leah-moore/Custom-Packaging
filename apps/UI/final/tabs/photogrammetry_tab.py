@@ -47,34 +47,6 @@ def build_photogrammetry_tab(app, parent) -> None:
 
     tk.Button(
         btn_row,
-        text="Start Camera",
-        command=app._start_photogrammetry_camera,
-        bg=BTN_GREEN,
-        fg=BTN_GREEN_FG,
-        activebackground=BTN_PRESSED,
-        activeforeground="#000000",
-        font=default_font,
-        width=12,
-        bd=3,
-        relief="raised",
-    ).pack(side="left", padx=(0, 4), pady=2)
-
-    tk.Button(
-        btn_row,
-        text="Stop Camera",
-        command=app._stop_photogrammetry_camera,
-        bg=BTN_RED,
-        fg=BTN_RED_FG,
-        activebackground=BTN_PRESSED,
-        activeforeground="#000000",
-        font=default_font,
-        width=12,
-        bd=3,
-        relief="raised",
-    ).pack(side="left", padx=4, pady=2)
-
-    tk.Button(
-        btn_row,
         text="Start Process",
         command=app._start_photogrammetry_process,
         bg=BTN_BLUE,
@@ -101,20 +73,16 @@ def build_photogrammetry_tab(app, parent) -> None:
         relief="raised",
     ).pack(side="left", padx=4, pady=2)
 
-    tk.Button(
+    tk.Label(
         btn_row,
-        text="Clear Session",
-        command=app._clear_photogrammetry_session,
-        bg=BTN_NEUTRAL,
-        fg=BTN_NEUTRAL_FG,
-        activebackground=BTN_PRESSED,
-        activeforeground="#000000",
+        textvariable=app.photogrammetry_info_text,
+        bg=PANEL_BG,
+        fg="#CCCCCC",
         font=default_font,
-        width=12,
-        bd=3,
-        relief="raised",
-    ).pack(side="left", padx=4, pady=2)
-
+        anchor="w",
+        justify="left",
+    ).pack(side="left", fill="x", expand=True, padx=(12, 8))
+        
     tk.Label(
         btn_row,
         textvariable=app.photogrammetry_status_var,
@@ -298,32 +266,6 @@ def build_photogrammetry_tab(app, parent) -> None:
         bd=2,
         relief="raised",
     ).pack(side="right", padx=(8, 0), pady=2)
-
-    # =====================================================
-    # INFO
-    # =====================================================
-    info_box = tk.LabelFrame(
-        main,
-        text="Photogrammetry Info",
-        bg=PANEL_BG,
-        fg=FG,
-        font=title_font,
-        padx=4,
-        pady=4,
-        bd=2,
-        relief="solid",
-    )
-    info_box.pack(fill="x", pady=(0, 4))
-
-    tk.Label(
-        info_box,
-        textvariable=app.photogrammetry_info_text,
-        bg=PANEL_BG,
-        fg="#CCCCCC",
-        font=default_font,
-        anchor="w",
-        justify="left",
-    ).pack(fill="x")
 
     # =====================================================
     # MAIN SPLIT VIEW

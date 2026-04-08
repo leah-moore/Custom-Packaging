@@ -39,20 +39,6 @@ CREASE_SIGN = 1.0
 INITIAL_KNIFE_HEADING_DEG = 0.0
 INITIAL_CREASE_HEADING_DEG = 0.0
 
-# -------------------------------------------------
-# Knife Geometry Compensation
-# -------------------------------------------------
-# Tool-local tip position relative to the swivel/pivot center when
-# heading = 0 deg and the blade faces +X.
-#
-# For your current case:
-# - tip trails pivot by ~1 mm
-# - no lateral offset
-#
-# So the local vector from pivot -> tip is (-1, 0).
-KNIFE_TIP_LOCAL_X = 0.0
-KNIFE_TIP_LOCAL_Y = 0.0
-
 # Disable entry slit while calibrating the real geometric correction.
 KNIFE_ENTRY_SLIT_MM = 0.0
 
@@ -110,42 +96,14 @@ def move_along_heading(x, y, angle_deg, distance_mm):
     )
 
 
-def offset_tip_to_pivot(x_tip, y_tip, angle_deg, tip_local_x, tip_local_y):
-    """
-    Convert desired knife-tip XY to swivel-center XY using a tool-local offset.
-
-    tip_local_x, tip_local_y:
-      vector from pivot center -> knife tip
-      in tool coordinates when angle_deg = 0 and blade faces +X.
-    """
-    a = math.radians(angle_deg)
-    ca = math.cos(a)
-    sa = math.sin(a)
-
-    # Rotate local pivot->tip vector into world space
-    dx = tip_local_x * ca - tip_local_y * sa
-    dy = tip_local_x * sa + tip_local_y * ca
-
-    # Machine commands the pivot center, not the tip
-    x_pivot = x_tip - dx
-    y_pivot = y_tip - dy
-    return x_pivot, y_pivot
-
-
 def machine_xy_for_tool(x, y, angle_deg, tool):
     """
     Convert desired tool-contact XY to commanded machine XY.
 
-    For knife cuts, op.path is treated as the desired knife-tip path.
-    The emitted XY is the swivel-center position required to place the
-    blade tip at that path point for the given heading.
+    Current assumption:
+    - no tool-center offset compensation is applied
+    - commanded XY matches path XY directly
     """
-    if tool == "knife":
-        return offset_tip_to_pivot(
-            x, y, angle_deg,
-            KNIFE_TIP_LOCAL_X,
-            KNIFE_TIP_LOCAL_Y
-        )
     return x, y
 
 
@@ -184,6 +142,22 @@ def emit_entry_slit_if_needed(lines, current_tool, axis, axis_val, feed, y_offse
     return (entry_tip_x, entry_tip_y)
 
 
+def crease_segment_angle_deg(p1, p2):
+    """
+    Crease wheel orientation for a line segment.
+
+    Wheel is symmetric, so theta and theta+180 are equivalent.
+    Normalize to [-90, 90).
+    """
+    raw = math.degrees(math.atan2(p2[1] - p1[1], p2[0] - p1[0]))
+
+    while raw >= 90.0:
+        raw -= 180.0
+    while raw < -90.0:
+        raw += 180.0
+
+    return raw
+
 # -------------------------------------------------
 # Main emitter
 # -------------------------------------------------
@@ -220,7 +194,7 @@ def emit_gcode(ops, feed_window_y=200.0):
 
     if uses_crease:
         init_crease_axis = crease_angle_to_axis(INITIAL_CREASE_HEADING_DEG)
-        lines.append(f"G1 C{init_crease_axis:.2f} F{FEED_CREASE}")
+        lines.append(f"G1 A{init_crease_axis:.2f} F{FEED_CREASE}")
 
     for op in ops:
 
@@ -246,7 +220,11 @@ def emit_gcode(ops, feed_window_y=200.0):
         # PIVOT IN AIR
         # ------------------
         elif isinstance(op, PivotAction):
-            unwrapped = unwrap_angle_deg(op.angle, last_emitted_angle)
+            if op.tool == "crease":
+                unwrapped = op.angle   # <-- JUST THIS
+            else:
+                unwrapped = unwrap_angle_deg(op.angle, last_emitted_angle)
+
             last_emitted_angle = unwrapped
 
             if op.tool == "knife":
@@ -256,7 +234,7 @@ def emit_gcode(ops, feed_window_y=200.0):
             elif op.tool == "crease":
                 axis_val = crease_angle_to_axis(unwrapped)
                 lines.append(f"G1 Z{SAFE_Z:.3f} F{FEED_Z}")
-                lines.append(f"G1 C{axis_val:.2f} F{FEED_CREASE}")
+                lines.append(f"G1 A{axis_val:.2f} F{FEED_CREASE}")
             else:
                 raise RuntimeError(f"Unknown tool type: {op.tool}")
 
@@ -291,126 +269,154 @@ def emit_gcode(ops, feed_window_y=200.0):
             if len(op.path) < 2:
                 raise RuntimeError("CutPath must contain at least 2 points")
 
-            feed = FEED_XY_KNIFE if current_tool == "knife" else FEED_CREASE
-            axis = "B" if current_tool == "knife" else "C"
-            cut_z = Z_KNIFE if current_tool == "knife" else Z_CREASE
-            axis_feed = FEED_B_KNIFE if current_tool == "knife" else FEED_CREASE
-
-            # --- PRE-ROTATE TO FIRST SEGMENT HEADING BEFORE CUTTING ---
-            first_raw_angle = get_angle(op.path[0], op.path[1])
-            first_angle = unwrap_angle_deg(first_raw_angle, last_emitted_angle)
-
             if current_tool == "knife":
+                feed = FEED_XY_KNIFE
+                axis = "B"
+                cut_z = Z_KNIFE
+                axis_feed = FEED_B_KNIFE
+
+                # --- PRE-ROTATE TO FIRST SEGMENT HEADING BEFORE CUTTING ---
+                first_raw_angle = get_angle(op.path[0], op.path[1])
+                first_angle = unwrap_angle_deg(first_raw_angle, last_emitted_angle)
+
                 first_axis_val = knife_angle_to_axis(first_angle)
-            else:
-                first_axis_val = crease_angle_to_axis(first_angle)
 
-            start_x, start_y = machine_xy_for_tool(
-                op.path[0][0],
-                op.path[0][1],
-                first_angle,
-                current_tool
-            )
+                start_x, start_y = machine_xy_for_tool(
+                    op.path[0][0],
+                    op.path[0][1],
+                    first_angle,
+                    current_tool
+                )
 
-            # Rotate in air, move XY to compensated start, then plunge
-            lines.append(f"G1 Z{SAFE_Z:.3f} F{FEED_Z}")
-            lines.append(f"G1 {axis}{first_axis_val:.2f} F{axis_feed}")
-            lines.append(f"G0 X{start_x:.3f} Y{start_y - y_offset:.3f}")
-            lines.append(f"G1 Z{cut_z:.3f} F{FEED_Z}")
+                # Rotate in air, move XY to compensated start, then plunge
+                lines.append(f"G1 Z{SAFE_Z:.3f} F{FEED_Z}")
+                lines.append(f"G1 {axis}{first_axis_val:.2f} F{axis_feed}")
+                lines.append(f"G0 X{start_x:.3f} Y{start_y - y_offset:.3f}")
+                lines.append(f"G1 Z{cut_z:.3f} F{FEED_Z}")
 
-            # Optional initial entry slit for knife
-            start_tip_pt = (op.path[0][0], op.path[0][1])
-            first_end_tip_pt = (op.path[1][0], op.path[1][1])
-            current_tip_pt = emit_entry_slit_if_needed(
-                lines=lines,
-                current_tool=current_tool,
-                axis=axis,
-                axis_val=first_axis_val,
-                feed=feed,
-                y_offset=y_offset,
-                angle=first_angle,
-                start_tip_pt=start_tip_pt,
-                end_tip_pt=first_end_tip_pt,
-            )
+                # Optional initial entry slit for knife
+                start_tip_pt = (op.path[0][0], op.path[0][1])
+                first_end_tip_pt = (op.path[1][0], op.path[1][1])
+                current_tip_pt = emit_entry_slit_if_needed(
+                    lines=lines,
+                    current_tool=current_tool,
+                    axis=axis,
+                    axis_val=first_axis_val,
+                    feed=feed,
+                    y_offset=y_offset,
+                    angle=first_angle,
+                    start_tip_pt=start_tip_pt,
+                    end_tip_pt=first_end_tip_pt,
+                )
 
-            last_segment_angle = None
-            last_emitted_angle = first_angle
+                last_segment_angle = None
+                last_emitted_angle = first_angle
 
-            for i in range(len(op.path) - 1):
-                p1, p2 = op.path[i], op.path[i + 1]
-                raw_angle = get_angle(p1, p2)
-                angle = unwrap_angle_deg(raw_angle, last_emitted_angle)
+                for i in range(len(op.path) - 1):
+                    p1, p2 = op.path[i], op.path[i + 1]
+                    raw_angle = get_angle(p1, p2)
+                    angle = unwrap_angle_deg(raw_angle, last_emitted_angle)
 
-                if current_tool == "knife":
                     axis_val = knife_angle_to_axis(angle)
-                else:
+
+                    seg_start_tip = p1
+
+                    # For the first segment, continue from any optional entry move
+                    if i == 0:
+                        seg_start_tip = current_tip_pt
+
+                    # Lift-to-turn for sharp corners only
+                    if last_segment_angle is not None:
+                        turn = angle_diff_deg(raw_angle, last_segment_angle)
+                        if abs(turn) > LIFT_TURN_THRESHOLD:
+                            prev_angle = last_emitted_angle
+                            prev_axis_val = knife_angle_to_axis(prev_angle)
+
+                            end_prev_x, end_prev_y = machine_xy_for_tool(
+                                p1[0], p1[1], prev_angle, current_tool
+                            )
+                            lines.append(
+                                f"G1 X{end_prev_x:.3f} "
+                                f"Y{end_prev_y - y_offset:.3f} "
+                                f"{axis}{prev_axis_val:.2f} F{feed}"
+                            )
+
+                            lines.append(f"G1 Z{SAFE_Z:.3f} F{FEED_Z}")
+                            lines.append(f"G1 {axis}{axis_val:.2f} F{axis_feed}")
+
+                            corner_x, corner_y = machine_xy_for_tool(
+                                p1[0], p1[1], angle, current_tool
+                            )
+                            lines.append(f"G0 X{corner_x:.3f} Y{corner_y - y_offset:.3f}")
+                            lines.append(f"G1 Z{cut_z:.3f} F{FEED_Z}")
+
+                            seg_start_tip = emit_entry_slit_if_needed(
+                                lines=lines,
+                                current_tool=current_tool,
+                                axis=axis,
+                                axis_val=axis_val,
+                                feed=feed,
+                                y_offset=y_offset,
+                                angle=angle,
+                                start_tip_pt=p1,
+                                end_tip_pt=p2,
+                            )
+
+                    if segment_length(seg_start_tip, p2) > 1e-9:
+                        x_cmd, y_cmd = machine_xy_for_tool(
+                            p2[0], p2[1], angle, current_tool
+                        )
+                        ym = y_cmd - y_offset
+
+                        lines.append(
+                            f"G1 X{x_cmd:.3f} "
+                            f"Y{ym:.3f} "
+                            f"{axis}{axis_val:.2f} F{feed}"
+                        )
+
+                    last_segment_angle = raw_angle
+                    last_emitted_angle = angle
+
+            else:
+                # ------------------
+                # CREASE PATH
+                # A moves only while lifted
+                # ------------------
+                feed = FEED_CREASE
+                axis = "A"
+                cut_z = Z_CREASE
+                axis_feed = FEED_CREASE
+
+                for i in range(len(op.path) - 1):
+                    p1 = op.path[i]
+                    p2 = op.path[i + 1]
+
+                    angle = crease_segment_angle_deg(p1, p2)
                     axis_val = crease_angle_to_axis(angle)
 
-                seg_start_tip = p1
-
-                # For the first segment, continue from any optional entry move
-                if i == 0:
-                    seg_start_tip = current_tip_pt
-
-                # Lift-to-turn for sharp corners only
-                if last_segment_angle is not None:
-                    turn = angle_diff_deg(raw_angle, last_segment_angle)
-                    if abs(turn) > LIFT_TURN_THRESHOLD:
-                        # Ensure previous segment ended exactly at its endpoint
-                        prev_angle = last_emitted_angle
-                        if current_tool == "knife":
-                            prev_axis_val = knife_angle_to_axis(prev_angle)
-                        else:
-                            prev_axis_val = crease_angle_to_axis(prev_angle)
-
-                        end_prev_x, end_prev_y = machine_xy_for_tool(
-                            p1[0], p1[1], prev_angle, current_tool
-                        )
-                        lines.append(
-                            f"G1 X{end_prev_x:.3f} "
-                            f"Y{end_prev_y - y_offset:.3f} "
-                            f"{axis}{prev_axis_val:.2f} F{feed}"
-                        )
-
-                        # Lift, rotate, reposition to the same desired tip point
-                        # using the NEW heading compensation, then plunge.
-                        lines.append(f"G1 Z{SAFE_Z:.3f} F{FEED_Z}")
-                        lines.append(f"G1 {axis}{axis_val:.2f} F{axis_feed}")
-
-                        corner_x, corner_y = machine_xy_for_tool(
-                            p1[0], p1[1], angle, current_tool
-                        )
-                        lines.append(f"G0 X{corner_x:.3f} Y{corner_y - y_offset:.3f}")
-                        lines.append(f"G1 Z{cut_z:.3f} F{FEED_Z}")
-
-                        seg_start_tip = emit_entry_slit_if_needed(
-                            lines=lines,
-                            current_tool=current_tool,
-                            axis=axis,
-                            axis_val=axis_val,
-                            feed=feed,
-                            y_offset=y_offset,
-                            angle=angle,
-                            start_tip_pt=p1,
-                            end_tip_pt=p2,
-                        )
-
-                # Final move for this segment
-                if segment_length(seg_start_tip, p2) > 1e-9:
-                    x_cmd, y_cmd = machine_xy_for_tool(
+                    start_x, start_y = machine_xy_for_tool(
+                        p1[0], p1[1], angle, current_tool
+                    )
+                    end_x, end_y = machine_xy_for_tool(
                         p2[0], p2[1], angle, current_tool
                     )
-                    ym = y_cmd - y_offset
 
+                    # Lift/rotate/reposition only when starting,
+                    # or when the crease angle changes.
+                    if i == 0 or last_emitted_angle is None or abs(angle - last_emitted_angle) > 0.1:
+                        lines.append(f"G1 Z{SAFE_Z:.3f} F{FEED_Z}")
+                        lines.append(f"G1 {axis}{axis_val:.2f} F{axis_feed}")
+                        lines.append(f"G0 X{start_x:.3f} Y{start_y - y_offset:.3f}")
+                        lines.append(f"G1 Z{cut_z:.3f} F{FEED_Z}")
+
+                    # Roll one straight segment
                     lines.append(
-                        f"G1 X{x_cmd:.3f} "
-                        f"Y{ym:.3f} "
+                        f"G1 X{end_x:.3f} "
+                        f"Y{end_y - y_offset:.3f} "
                         f"{axis}{axis_val:.2f} F{feed}"
                     )
 
-                last_segment_angle = raw_angle
-                last_emitted_angle = angle
-
+                    last_emitted_angle = angle
         # ------------------
         # TOOL UP
         # ------------------

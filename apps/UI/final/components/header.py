@@ -5,46 +5,33 @@ from ..theme import BG, FG, BTN_NEUTRAL, BTN_NEUTRAL_FG, BTN_PRESSED
 
 
 def build_header(app, parent):
-    header = tk.Frame(parent, bg=BG)
-    header.pack(fill="x", pady=(2, 0), padx=0)
+    header = tk.Frame(parent, bg=BG, height=58)
+    header.pack(fill="x", pady=(2, 0), padx=8)
+    header.pack_propagate(False)
 
-    # 3-column layout: left controls | centered limits | right status
-    header.grid_columnconfigure(0, weight=0)
-    header.grid_columnconfigure(1, weight=1)
-    header.grid_columnconfigure(2, weight=0)
-
-    left = tk.Frame(header, bg=BG)
-    left.grid(row=0, column=0, sticky="w", padx=(8, 0), pady=2)
-
-    center = tk.Frame(header, bg=BG)
-    center.grid(row=0, column=1, sticky="nsew", padx=(12, 12), pady=2)
-
-    right = tk.Frame(header, bg=BG)
-    right.grid(row=0, column=2, sticky="e", padx=(16, 12), pady=2)
-
-    label_font = ("Arial", 12, "bold")
-    button_font = ("Arial", 11, "bold")
+    label_font = ("Arial", 10, "bold")
+    button_font = ("Arial", 10, "bold")
     entry_font = ("Arial", 10, "bold")
-    status_font = ("Arial", 12, "bold")
-    info_font = ("Arial", 10, "bold")
+    status_font = ("Arial", 10, "bold")
+    info_font = ("Arial", 9, "bold")
     limits_font = ("Arial", 10, "bold")
 
-    # LEFT SIDE
-    tk.Label(
-        left,
-        text="Port",
-        bg=BG,
-        fg=FG,
-        font=label_font,
-    ).pack(side="left", padx=(0, 4))
+    # =========================
+    # LEFT: CONNECTION CONTROLS
+    # =========================
+    left = tk.Frame(header, bg=BG)
+    left.pack(side="left", fill="y")
+
+    tk.Label(left, text="Port", bg=BG, fg=FG, font=label_font).pack(side="left", padx=(0, 4))
 
     app.port_combo = ttk.Combobox(
         left,
         textvariable=app.port_var,
-        width=22,
+        width=18,
         font=entry_font,
+        state="readonly",
     )
-    app.port_combo.pack(side="left", padx=(0, 10), ipady=2)
+    app.port_combo.pack(side="left", padx=(0, 8), ipady=1)
 
     tk.Button(
         left,
@@ -53,81 +40,67 @@ def build_header(app, parent):
         bg=BTN_NEUTRAL,
         fg=BTN_NEUTRAL_FG,
         activebackground=BTN_PRESSED,
+        activeforeground="#000000",
         font=button_font,
-        padx=12,
-        pady=2,
-    ).pack(side="left", padx=(0, 12))
+        width=8,
+        pady=1,
+    ).pack(side="left", padx=(0, 10))
 
-    tk.Label(
-        left,
-        text="Baud",
-        bg=BG,
-        fg=FG,
-        font=label_font,
-    ).pack(side="left", padx=(0, 4))
+    tk.Label(left, text="Baud", bg=BG, fg=FG, font=label_font).pack(side="left", padx=(0, 4))
 
-    tk.Entry(
+    app.baud_combo = ttk.Combobox(
         left,
         textvariable=app.baud_var,
         width=8,
         font=entry_font,
-    ).pack(side="left", padx=(0, 12), ipady=2)
+        state="readonly",
+        values=["9600", "19200", "38400", "57600", "115200", "230400"],
+    )
+    app.baud_combo.pack(side="left", padx=(0, 8), ipady=1)
 
     tk.Button(
         left,
         text="Connect",
         command=app._connect,
+        bg=BTN_NEUTRAL,
+        fg=BTN_NEUTRAL_FG,
+        activebackground=BTN_PRESSED,
+        activeforeground="#000000",
         font=button_font,
-        padx=12,
-        pady=2,
-    ).pack(side="left", padx=(0, 8))
+        width=9,
+        pady=1,
+    ).pack(side="left", padx=(0, 6))
 
     tk.Button(
         left,
         text="Disconnect",
         command=app._disconnect,
+        bg=BTN_NEUTRAL,
+        fg=BTN_NEUTRAL_FG,
+        activebackground=BTN_PRESSED,
+        activeforeground="#000000",
         font=button_font,
-        padx=12,
-        pady=2,
-    ).pack(side="left", padx=(0, 0))
+        width=10,
+        pady=1,
+    ).pack(side="left")
 
-    # CENTER: LIMITS
-    limits_row = tk.Frame(center, bg=BG)
-    limits_row.pack(expand=True)
+    # =========================
+    # RIGHT: STATUS
+    # =========================
+    # Fixed-width area so long status text doesn't shove the limits around
+    right = tk.Frame(header, bg=BG, width=240)
+    right.pack(side="right", fill="y")
+    right.pack_propagate(False)
 
-    tk.Label(
-        limits_row,
-        text="Limits:",
-        bg=BG,
-        fg="#FFD54A",
-        font=info_font,
-    ).pack(side="left", padx=(0, 4))
-
-    app.limit_labels = {}
-    for axis in ["X", "Y", "Z", "A", "B"]:
-        lbl = tk.Label(
-            limits_row,
-            text=axis,
-            bg="#4A4A4A",
-            fg="#FFFFFF",
-            width=3,
-            font=limits_font,
-            relief="solid",
-            bd=1,
-            padx=2,
-            pady=2,
-        )
-        lbl.pack(side="left", padx=2)
-        app.limit_labels[axis] = lbl
-
-    # RIGHT SIDE
     tk.Label(
         right,
         textvariable=app.status_text,
         bg=BG,
         fg="#DDDDDD",
         font=status_font,
-    ).pack(anchor="e")
+        anchor="e",
+        justify="right",
+    ).pack(anchor="e", pady=(2, 0))
 
     tk.Label(
         right,
@@ -135,7 +108,9 @@ def build_header(app, parent):
         bg=BG,
         fg="#BBBBBB",
         font=info_font,
-    ).pack(anchor="e", pady=(2, 0))
+        anchor="e",
+        justify="right",
+    ).pack(anchor="e")
 
     tk.Label(
         right,
@@ -143,4 +118,38 @@ def build_header(app, parent):
         bg=BG,
         fg="#00FF88",
         font=info_font,
-    ).pack(anchor="e", pady=(2, 0))
+        anchor="e",
+        justify="right",
+    ).pack(anchor="e")
+
+    # =========================
+    # CENTER: LIMITS
+    # =========================
+    # Overlay in the visual center so it stays centered
+    center = tk.Frame(header, bg=BG)
+    center.place(relx=0.63, rely=0.45, anchor="center")
+
+    tk.Label(
+        center,
+        text="Limits:",
+        bg=BG,
+        fg="#FFD54A",
+        font=info_font,
+    ).pack(side="left", padx=(0, 6))
+
+    app.limit_labels = {}
+    for axis in ["X", "Y", "Z", "A", "B"]:
+        lbl = tk.Label(
+            center,
+            text=axis,
+            bg="#4A4A4A",
+            fg="#FFFFFF",
+            width=2,
+            font=limits_font,
+            relief="solid",
+            bd=1,
+            padx=1,
+            pady=1,
+        )
+        lbl.pack(side="left", padx=2)
+        app.limit_labels[axis] = lbl

@@ -201,35 +201,6 @@ def build_vision_dxf_tab(app, parent) -> None:
     make_mode_button("Camera Only", "camera")
     make_mode_button("DXF Only", "dxf")
 
-    tk.Frame(tools_row, bg=PANEL_BG, width=18).pack(side="left")
-
-    tk.Button(
-        tools_row,
-        text="Rotate -5°",
-        command=lambda: app._rotate_dxf(-5.0),
-        bg=BTN_NEUTRAL,
-        fg=BTN_NEUTRAL_FG,
-        activebackground=BTN_PRESSED,
-        activeforeground="#000000",
-        font=default_font,
-        width=12,
-        bd=2,
-        relief="raised",
-    ).pack(side="left", padx=4, pady=2)
-
-    tk.Button(
-        tools_row,
-        text="Rotate +5°",
-        command=lambda: app._rotate_dxf(5.0),
-        bg=BTN_NEUTRAL,
-        fg=BTN_NEUTRAL_FG,
-        activebackground=BTN_PRESSED,
-        activeforeground="#000000",
-        font=default_font,
-        width=12,
-        bd=2,
-        relief="raised",
-    ).pack(side="left", padx=4, pady=2)
 
     tk.Frame(tools_row, bg=PANEL_BG, width=18).pack(side="left")
 
@@ -245,7 +216,7 @@ def build_vision_dxf_tab(app, parent) -> None:
         width=10,
         bd=2,
         relief="raised",
-    ).pack(side="left", padx=4, pady=2)
+    ).pack(side="right", padx=4, pady=2)
 
     tk.Button(
         tools_row,
@@ -259,7 +230,7 @@ def build_vision_dxf_tab(app, parent) -> None:
         width=10,
         bd=2,
         relief="raised",
-    ).pack(side="left", padx=4, pady=2)
+    ).pack(side="right", padx=4, pady=2)
 
     tk.Button(
         tools_row,
@@ -273,7 +244,7 @@ def build_vision_dxf_tab(app, parent) -> None:
         width=10,
         bd=2,
         relief="raised",
-    ).pack(side="left", padx=(12, 4), pady=2)
+    ).pack(side="right", padx=(12, 4), pady=2)
 
     tk.Button(
         tools_row,
@@ -287,7 +258,17 @@ def build_vision_dxf_tab(app, parent) -> None:
         width=10,
         bd=2,
         relief="raised",
-    ).pack(side="left", padx=4, pady=2)
+    ).pack(side="right", padx=4, pady=2)
+
+
+    tk.Label(
+        tools_row,
+        text="DXF Controls:",
+        bg=PANEL_BG,
+        fg=FG,
+        font=small_font,
+    ).pack(side="right", padx=(0, 6))
+
 
     # =====================================================
     # MAIN VIEW AREA
@@ -349,6 +330,9 @@ def build_vision_dxf_tab(app, parent) -> None:
     app.dxf_preview_canvas.bind("<MouseWheel>", app._on_dxf_mousewheel)
     app.dxf_preview_canvas.bind("<Button-4>", app._on_dxf_mousewheel)
     app.dxf_preview_canvas.bind("<Button-5>", app._on_dxf_mousewheel)
+    app.dxf_preview_canvas.bind("<ButtonPress-1>", app._on_dxf_pan_start)
+    app.dxf_preview_canvas.bind("<B1-Motion>", app._on_dxf_pan_move)
+    app.dxf_preview_canvas.bind("<ButtonRelease-1>", app._on_dxf_pan_end)
 
     app.dxf_info_text = tk.StringVar(value="No DXF loaded")
     tk.Label(
