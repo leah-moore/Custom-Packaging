@@ -999,6 +999,47 @@ class TouchUI(tk.Tk):
     # =========================
     # PHOTOGRAMMETRY
     # =========================
+    def _gpio_pulse_high(self, pin_num: int, duration_s: float) -> None:
+        """
+        Output a high signal to the specified GPIO pin for a given duration.
+        Runs in a separate thread to avoid blocking the UI.
+        
+        Args:
+            pin_num: GPIO pin number
+            duration_s: Duration to keep the pin high (in seconds)
+        """
+        def gpio_worker():
+            try:
+                try:
+                    import gpiozero
+                    pin = gpiozero.OutputDevice(pin_num, active_high=True)
+                    pin.on()
+                    self._append_console(f"[GPIO] Pin {pin_num} set HIGH")
+                    time.sleep(duration_s)
+                    pin.off()
+                    self._append_console(f"[GPIO] Pin {pin_num} set LOW (after {duration_s}s)")
+                    pin.close()
+                except ImportError:
+                    try:
+                        import RPi.GPIO as GPIO
+                        GPIO.setmode(GPIO.BCM)
+                        GPIO.setup(pin_num, GPIO.OUT)
+                        GPIO.output(pin_num, GPIO.HIGH)
+                        self._append_console(f"[GPIO] Pin {pin_num} set HIGH")
+                        time.sleep(duration_s)
+                        GPIO.output(pin_num, GPIO.LOW)
+                        self._append_console(f"[GPIO] Pin {pin_num} set LOW (after {duration_s}s)")
+                        GPIO.cleanup(pin_num)
+                    except ImportError:
+                        self._append_console(f"[GPIO] WARNING: No GPIO library available (gpiozero or RPi.GPIO)")
+                    except Exception as e:
+                        self._append_console(f"[GPIO] ERROR with RPi.GPIO: {e}")
+            except Exception as e:
+                self._append_console(f"[GPIO] Unexpected error: {e}")
+        
+        # Run in a separate thread to avoid blocking the UI
+        threading.Thread(target=gpio_worker, daemon=True).start()
+
     def _start_photogrammetry_camera(self) -> None:
         self.photogrammetry_status_var.set("Camera running")
         self.photogrammetry_camera_info_var.set("Live camera running (stub)")
@@ -1009,8 +1050,12 @@ class TouchUI(tk.Tk):
 
     def _start_photogrammetry_process(self) -> None:
         self.photogrammetry_status_var.set("Processing...")
-        self.photogrammetry_info_text.set("Photogrammetry process started (stub)")
-        self._append_console("> Start photogrammetry process (stub)")
+        self.photogrammetry_info_text.set("Photogrammetry process started")
+        self._append_console("> Start photogrammetry process")
+        
+        # Output 2-second high signal to GPIO pin 4
+        self._gpio_pulse_high(pin_num=4, duration_s=2.0)
+
 
     def _load_photogrammetry_mesh(self) -> None:
         path = filedialog.askopenfilename(

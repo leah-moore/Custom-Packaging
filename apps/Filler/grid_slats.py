@@ -52,7 +52,7 @@ else:
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
 # ---------------- USER SETTINGS ----------------
-INPUT_STL = Path("data/stl/input/Asymmetrical/mouse.stl")  # change if needed
+INPUT_STL = Path("home/joshxck/CPD_GUI/meshShare")  # change if needed
 
 # ---------------- SYMMETRY MODE ----------------
 # Options:
