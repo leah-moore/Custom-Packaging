@@ -27,7 +27,7 @@ from shapely.affinity import translate, rotate as shp_rotate
 from apps.gcode.machine_ops_planner import build_machine_ops
 from apps.gantry.pi_teensy_coordination.job_runner import JobRunner
 from apps.gantry.pi_teensy_coordination.roller_controller import RollerController
-from apps.UI.tablet.dxf_handler import DXFDieline
+from apps.UI.Tablet.dxf_handler import DXFDieline
 #from apps.Vision.runner import VisionRunner
 
 from .components.preview_actions_builder import build_preview_actions
