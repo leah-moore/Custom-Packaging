@@ -586,7 +586,7 @@ def build_manual_setup_tab(app, parent) -> None:
             textvariable=w_var,
             bg="#171717",
             fg="#FFD54A",
-            font=("Courier", 12, "bold"),
+            font=("Courier", 8, "bold"),
             width=5,
             anchor="e",
         ).pack(anchor="w")
