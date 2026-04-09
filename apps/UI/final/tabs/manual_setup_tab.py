@@ -244,6 +244,36 @@ def build_manual_setup_tab(app, parent) -> None:
     make_jog_button(jog_box, "B+", {"B": 1}, 0, 9)
     make_jog_button(jog_box, "B-", {"B": -1}, 1, 9)
 
+    # =====================================================
+    # LIMIT INDICATORS (Lower Right of Jog Box)
+    # =====================================================
+    # We place these in row 2, under the A/B rotary buttons.
+    # Row 2, Col 1 is occupied by Y-, so Col 8-9 is wide open.
+    limit_container = tk.Frame(jog_box, bg=PANEL_BG)
+    limit_container.grid(row=2, column=8, columnspan=2, sticky="se", padx=3, pady=6)
+
+    tk.Label(
+        limit_container,
+        text="Limits:",
+        bg=PANEL_BG,
+        fg="#FFD54A",
+        font=("Arial", 8, "bold"),
+    ).pack(side="left", padx=(0, 4))
+
+    app.limit_labels = {}
+    for axis in ["X", "Y", "Z", "A", "B"]:
+        lbl = tk.Label(
+            limit_container,
+            text=axis,
+            bg="#333333",  # Darker gray for 'off' state
+            fg="#777777",
+            width=2,
+            font=("Arial", 8, "bold"),
+            relief="solid",
+            bd=1,
+        )
+        lbl.pack(side="left", padx=1)
+        app.limit_labels[axis] = lbl
 
     # =====================================================
     # RIGHT: JOG MODE
@@ -255,7 +285,7 @@ def build_manual_setup_tab(app, parent) -> None:
         fg=FG,
         font=panel_font,
         padx=6,
-        pady=4,
+        pady=2,
         bd=2,
         relief="solid",
     )
@@ -409,7 +439,7 @@ def build_manual_setup_tab(app, parent) -> None:
         fg=BTN_YELLOW,
         font=panel_font,
         padx=4,
-        pady=4,
+        pady=2,
         bd=2,
         relief="solid",
         width=220,
@@ -463,7 +493,7 @@ def build_manual_setup_tab(app, parent) -> None:
     ).grid(row=2, column=0, columnspan=2, padx=3, pady=(2, 0), sticky="w")
 
     speed_row = tk.Frame(outputs_box, bg=PANEL_BG, height=28)
-    speed_row.grid(row=3, column=0, columnspan=2, padx=3, pady=(2, 6), sticky="w")
+    speed_row.grid(row=3, column=0, columnspan=2, padx=3, pady=(1, 3), sticky="w")
     speed_row.grid_propagate(False)
 
     for rpm in ["1000", "2000", "3000", "4000"]:
@@ -581,25 +611,27 @@ def build_manual_setup_tab(app, parent) -> None:
             anchor="w",
         ).pack(anchor="w")
 
+        # Work Position (Yellow)
         tk.Label(
             cell,
             textvariable=w_var,
             bg="#171717",
             fg="#FFD54A",
-            font=("Courier", 8, "bold"),
-            width=5,
-            anchor="e",
-        ).pack(anchor="w")
+            font=("Courier", 9, "bold"), # Increased font size slightly for readability
+            width=9,                     # INCREASED from 5 to 9
+            anchor="e",                  # Keeps numbers right-justified
+        ).pack(anchor="e", fill="x")     # Changed to anchor="e" to match the text flow
 
+        # Machine Position (Grey)
         tk.Label(
             cell,
             textvariable=m_var,
             bg="#171717",
             fg="#777777",
             font=("Courier", 10),
-            width=5,
-            anchor="e",
-        ).pack(anchor="w")
+            width=9,                     # INCREASED from 5 to 9
+            anchor="e",                  # Keeps numbers right-justified
+        ).pack(anchor="e", fill="x")     # Changed to anchor="e" to match the text flow
 
     for c in range(5):
         dro_frame.grid_columnconfigure(c, weight=1)

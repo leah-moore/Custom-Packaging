@@ -717,13 +717,15 @@ def enforce_min_overhang_against_board(cutout, board_rect, min_overhang):
 
     return safe_geom(cutout)
 
-
-def cut_xy_slots(pg_xy, y_levels, x_open, x_stop,
+def cut_xy_slots(board_pg, ref_pg, y_levels, x_open, x_stop,
                  rYmin, rYmax, slotH, edgeSafety, openEps, side):
-    if pg_xy is None or pg_xy.is_empty:
-        return pg_xy
+    """XY Slats (Layers): Slots open toward the OUTSIDE board edge."""
+    if board_pg is None or board_pg.is_empty:
+        return board_pg
 
     rects = []
+    board_outer_x = x_stop  # far board edge
+
     for yC0 in y_levels:
         yC = float(np.clip(
             yC0,
@@ -732,45 +734,56 @@ def cut_xy_slots(pg_xy, y_levels, x_open, x_stop,
         ))
         y1, y2 = yC - 0.5 * slotH, yC + 0.5 * slotH
 
-        xInts = line_poly_intersect_x(pg_xy, yC, (min(x_open, x_stop), max(x_open, x_stop)))
-        if len(xInts) < 2:
-            continue
+        xInts = []
+        if ref_pg is not None and not ref_pg.is_empty:
+            xInts = line_poly_intersect_x(
+                ref_pg,
+                yC,
+                (min(x_open, x_stop), max(x_open, x_stop))
+            )
 
-        for s in range(0, len(xInts) - 1, 2):
-            xL, xR = xInts[s], xInts[s + 1]
-
-            x_overlap_L = xL + edgeSafety
-            x_overlap_R = xR - edgeSafety
-            overlapW = x_overlap_R - x_overlap_L
-
-            if overlapW <= 0:
-                continue
-
-            x_mid = 0.5 * (x_overlap_L + x_overlap_R)
+        if len(xInts) >= 1:
+            # NORMAL: use object edge to find surviving flange
+            if side == "right":
+                x_obj_edge = xInts[-1]  # rightmost object edge
+                x_meat_start, x_meat_end = x_obj_edge, board_outer_x
+                xs0 = 0.5 * (x_meat_start + x_meat_end)
+                xs1 = x_meat_end + openEps
+            else:
+                x_obj_edge = xInts[0]   # leftmost object edge
+                x_meat_start, x_meat_end = board_outer_x, x_obj_edge
+                xs0 = x_meat_start - openEps
+                xs1 = 0.5 * (x_meat_start + x_meat_end)
+        else:
+            # FALLBACK: no object intersection, still cut grid slot
+            x_mid = 0.5 * (min(x_open, x_stop) + max(x_open, x_stop))
 
             if side == "right":
-                # XY owns object-facing half on right boards
-                xs0 = x_overlap_L - openEps
-                xs1 = x_mid
-            else:
-                # XY owns object-facing half on left boards
+                # XY owns OUTER half on right boards
                 xs0 = x_mid
-                xs1 = x_overlap_R + openEps
+                xs1 = board_outer_x + openEps
+            else:
+                # XY owns OUTER half on left boards
+                xs0 = board_outer_x - openEps
+                xs1 = x_mid
 
-            if xs1 > xs0:
-                rects.append(box(xs0, y1, xs1, y2))
+        if xs1 > xs0:
+            rects.append(box(xs0, y1, xs1, y2))
 
     if not rects:
-        return pg_xy
+        return board_pg
 
-    return safe_geom(pg_xy.difference(unary_union(rects)))
+    return safe_geom(board_pg.difference(unary_union(rects)))
 
-def cut_xz_slots(pg_xz, z_levels, x_open, x_stop,
+def cut_xz_slots(board_pg, ref_pg, z_levels, x_open, x_stop,
                  rZmin, rZmax, slotH, edgeSafety, openEps, side):
-    if pg_xz is None or pg_xz.is_empty:
-        return pg_xz
+    """XZ Slats (Ribs): Slots open toward the INSIDE (the object hole)."""
+    if board_pg is None or board_pg.is_empty:
+        return board_pg
 
     rects = []
+    board_outer_x = x_open  # outer board edge in current call pattern
+
     for zC0 in z_levels:
         zC = float(np.clip(
             zC0,
@@ -779,41 +792,45 @@ def cut_xz_slots(pg_xz, z_levels, x_open, x_stop,
         ))
         z1, z2 = zC - 0.5 * slotH, zC + 0.5 * slotH
 
-        xInts = line_poly_intersect_x(
-            pg_xz, zC,
-            (min(x_open, x_stop), max(x_open, x_stop))
-        )
-        if len(xInts) < 2:
-            continue
+        xInts = []
+        if ref_pg is not None and not ref_pg.is_empty:
+            xInts = line_poly_intersect_x(
+                ref_pg,
+                zC,
+                (min(x_open, x_stop), max(x_open, x_stop))
+            )
 
-        for s in range(0, len(xInts) - 1, 2):
-            xL, xR = xInts[s], xInts[s + 1]
-            
-            x_overlap_L = xL + edgeSafety
-            x_overlap_R = xR - edgeSafety
-            overlapW = x_overlap_R - x_overlap_L
-
-            if overlapW <= 0:
-                continue
-
-            x_mid = 0.5 * (x_overlap_L + x_overlap_R)
-
+        if len(xInts) >= 1:
+            # NORMAL: use object edge to find surviving flange
             if side == "right":
-                # XZ owns outer half on right boards
-                xs0 = x_mid
-                xs1 = x_overlap_R + openEps
+                x_obj_edge = xInts[-1]
+                x_meat_start, x_meat_end = x_obj_edge, board_outer_x
+                # XZ owns INNER half on right boards
+                xs0 = x_meat_start - openEps
+                xs1 = 0.5 * (x_meat_start + x_meat_end)
             else:
-                # XZ owns outer half on left boards
-                xs0 = x_overlap_L - openEps
-                xs1 = x_mid
+                x_obj_edge = xInts[0]
+                x_meat_start, x_meat_end = board_outer_x, x_obj_edge
+                # XZ owns INNER half on left boards
+                xs0 = 0.5 * (x_meat_start + x_meat_end)
+                xs1 = x_meat_end + openEps
+        else:
+            # FALLBACK: Ensure the box coordinates are in (min, max) order
+            x_mid = 0.5 * (min(x_open, x_stop) + max(x_open, x_stop))
+            if side == "right":
+                # Cut from the inner edge (x_stop = 0.0) to the middle
+                xs0, xs1 = x_stop - openEps, x_mid
+            else:
+                # Cut from the middle to the inner edge (x_stop = 0.0)
+                xs0, xs1 = x_mid, x_stop + openEps
 
-            if xs1 > xs0:
-                rects.append(box(xs0, z1, xs1, z2))
+        if xs1 > xs0:
+            rects.append(box(xs0, z1, xs1, z2))
 
     if not rects:
-        return pg_xz
+        return board_pg
 
-    return safe_geom(pg_xz.difference(unary_union(rects)))
+    return safe_geom(board_pg.difference(unary_union(rects)))
 
 def mirror_geom_x(g):
     if g is None or g.is_empty:
@@ -1107,148 +1124,120 @@ def compute_worldgrid_from_stl(stl_path, n_xy=None, n_xz=None):
     rectXY_left  = box(-boardW, rYmin, 0.0, rYmax)
     rectXZ_left  = box(-boardW, rZmin, 0.0, rZmax)
 
-    # -------------------------------------------------
-    # Build world slats (OPEN POCKET AT X = 0, TRUE SANDWICH)
-    # -------------------------------------------------
-
-    rectXY_right = box(0.0, rYmin, boardW, rYmax)
-    rectXZ_right = box(0.0, rZmin, boardW, rZmax)
-
-    rectXY_left  = box(-boardW, rYmin, 0.0, rYmax)
-    rectXZ_left  = box(-boardW, rZmin, 0.0, rZmax)
-
-    # -------------------------
-    # Build world XY slats
-    # -------------------------
-
-    worldXY_right = []
-    worldXY_left  = []
-
-    for cutXY in xy_right:
-        if cutXY:
-            cutXY = enforce_min_overhang_against_board(cutXY, rectXY_right, MIN_SLAT_OVERHANG)
-
-        worldXY_right.append(
-            make_open_pocket(rectXY_right, cutXY, 0.0, rYmin, rYmax, fixGapMin)
-            if cutXY else rectXY_right
-        )
-
-    for cutXY in xy_left:
-        if cutXY:
-            cutXY = enforce_min_overhang_against_board(cutXY, rectXY_left, MIN_SLAT_OVERHANG)
-
-        worldXY_left.append(
-            make_open_pocket(rectXY_left, cutXY, -boardW, rYmin, rYmax, fixGapMin)
-            if cutXY else rectXY_left
-        )
-
-    # -------------------------
-    # Build world XZ slats
-    # -------------------------
-
-    worldXZ_right = []
-    worldXZ_left  = []
-
-    for cutXZ in xz_right:
-        if cutXZ:
-            cutXZ = enforce_min_overhang_against_board(cutXZ, rectXZ_right, MIN_SLAT_OVERHANG)
-
-        worldXZ_right.append(
-            make_open_pocket(rectXZ_right, cutXZ, 0.0, rZmin, rZmax, fixGapMin)
-            if cutXZ else rectXZ_right
-        )
-
-    for cutXZ in xz_left:
-        if cutXZ:
-            cutXZ = enforce_min_overhang_against_board(cutXZ, rectXZ_left, MIN_SLAT_OVERHANG)
-
-        worldXZ_left.append(
-            make_open_pocket(rectXZ_left, cutXZ, -boardW, rZmin, rZmax, fixGapMin)
-            if cutXZ else rectXZ_left
-        )
-
-    if is_symmetric and not CUT_BOTH_SIDES:
-        worldXY_left = []
-        worldXZ_left = []
-
-    # -------------------------------------------------
-    # Slots
-    # -------------------------------------------------
 
     edgeSafety = max(slotSafety, 1.0)
     slotH = materialT + kerfFit
     openEps = 0.5
 
-    worldXY_right = [
+    # -------------------------
+    # Cut slots FIRST
+    # -------------------------
+    slotXY_right = [
         cut_xy_slots(
-            pg,
-            yLevels,
-            x_open=0.0,
-            x_stop=rXmax,
-            rYmin=rYmin,
-            rYmax=rYmax,
-            slotH=slotH,
-            edgeSafety=edgeSafety,
-            openEps=openEps,
-            side = "right",
-        )
-        for pg in worldXY_right
-    ]
-
-    worldXY_left = [
-        cut_xy_slots(
-            pg,
-            yLevels,
-            x_open=0.0,
-            x_stop=-boardW,
-            rYmin=rYmin,
-            rYmax=rYmax,
-            slotH=slotH,
-            edgeSafety=edgeSafety,
-            openEps=openEps,
-            side = "left",
-        )
-        for pg in worldXY_left
-    ]
-
-    worldXZ_right = [
-        cut_xz_slots(
-            pg,
-            zLevels,
-            x_open=rXmax,
-            x_stop=0.0,
-            rZmin=rZmin,
-            rZmax=rZmax,
-            slotH=slotH,
-            edgeSafety=edgeSafety,
-            openEps=openEps,
-            side="right",
-        )
-        for pg in worldXZ_right
-    ]
-
-    worldXZ_left = [
-        cut_xz_slots(
-            pg,
-            zLevels,
-            x_open=-boardW,
-            x_stop=0.0,
-            rZmin=rZmin,
-            rZmax=rZmax,
-            slotH=slotH,
-            edgeSafety=edgeSafety,
-            openEps=openEps,
-            side="left",
-        )
-        for pg in worldXZ_left
-    ]
-
-    print(
-        "worldXY_right:", len(worldXY_right),
-        "worldXY_left:",  len(worldXY_left),
-        "worldXZ_right:", len(worldXZ_right),
-        "worldXZ_left:",  len(worldXZ_left),
+        rectXY_right,
+        cutXY,
+        yLevels,
+        x_open=0.0,
+        x_stop=rXmax,
+        rYmin=rYmin,
+        rYmax=rYmax,
+        slotH=slotH,
+        edgeSafety=edgeSafety,
+        openEps=openEps,
+        side="right",
     )
+    for cutXY in xy_right
+    ]
+
+    slotXY_left = [
+        cut_xy_slots(
+        rectXY_left,
+        cutXY,
+        yLevels,
+        x_open=0.0,
+        x_stop=-boardW,
+        rYmin=rYmin,
+        rYmax=rYmax,
+        slotH=slotH,
+        edgeSafety=edgeSafety,
+        openEps=openEps,
+        side="left",
+    )
+    for cutXY in xy_left
+    ]
+
+    slotXZ_right = [
+        cut_xz_slots(
+        rectXZ_right,
+        cutXZ,
+        zLevels,
+        x_open=rXmax,
+        x_stop=0.0,
+        rZmin=rZmin,
+        rZmax=rZmax,
+        slotH=slotH,
+        edgeSafety=edgeSafety,
+        openEps=openEps,
+        side="right",
+        )
+        for cutXZ in xz_right
+    ]
+
+    slotXZ_left = [
+        cut_xz_slots(
+        rectXZ_left,
+        cutXZ,
+        zLevels,
+        x_open=-boardW,
+        x_stop=0.0,
+        rZmin=rZmin,
+        rZmax=rZmax,
+        slotH=slotH,
+        edgeSafety=edgeSafety,
+        openEps=openEps,
+        side="left",
+        )
+        for cutXZ in xz_left
+    ]
+
+    # -------------------------
+    # THEN cut the object pocket
+    # -------------------------
+    worldXY_right = []
+    for pg, cutXY in zip(slotXY_right, xy_right):
+        if cutXY:
+            cutXY = enforce_min_overhang_against_board(cutXY, rectXY_right, MIN_SLAT_OVERHANG)
+        worldXY_right.append(
+            make_open_pocket(pg, cutXY, 0.0, rYmin, rYmax, fixGapMin)
+            if cutXY else pg
+        )
+
+    worldXY_left = []
+    for pg, cutXY in zip(slotXY_left, xy_left):
+        if cutXY:
+            cutXY = enforce_min_overhang_against_board(cutXY, rectXY_left, MIN_SLAT_OVERHANG)
+        worldXY_left.append(
+            make_open_pocket(pg, cutXY, -boardW, rYmin, rYmax, fixGapMin)
+            if cutXY else pg
+        )
+
+    worldXZ_right = []
+    for pg, cutXZ in zip(slotXZ_right, xz_right):
+        if cutXZ:
+            cutXZ = enforce_min_overhang_against_board(cutXZ, rectXZ_right, MIN_SLAT_OVERHANG)
+        worldXZ_right.append(
+            make_open_pocket(pg, cutXZ, 0.0, rZmin, rZmax, fixGapMin)
+            if cutXZ else pg
+        )
+
+    worldXZ_left = []
+    for pg, cutXZ in zip(slotXZ_left, xz_left):
+        if cutXZ:
+            cutXZ = enforce_min_overhang_against_board(cutXZ, rectXZ_left, MIN_SLAT_OVERHANG)
+        worldXZ_left.append(
+            make_open_pocket(pg, cutXZ, -boardW, rZmin, rZmax, fixGapMin)
+            if cutXZ else pg
+        )
 
     # -------------------------------------------------
     # Convert curves → straight blade segments

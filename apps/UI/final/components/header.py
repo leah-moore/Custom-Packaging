@@ -88,7 +88,7 @@ def build_header(app, parent):
     # RIGHT: STATUS
     # =========================
     # Fixed-width area so long status text doesn't shove the limits around
-    right = tk.Frame(header, bg=BG, width=100)
+    right = tk.Frame(header, bg=BG, width=120)
     right.pack(side="right", fill="y")
     right.pack_propagate(False)
 
@@ -122,34 +122,3 @@ def build_header(app, parent):
         justify="right",
     ).pack(anchor="e")
 
-    # =========================
-    # CENTER: LIMITS
-    # =========================
-    # Overlay in the visual center so it stays centered
-    center = tk.Frame(header, bg=BG)
-    center.place(relx=0.75, rely=0.45, anchor="center")
-
-    tk.Label(
-        center,
-        text="Limits:",
-        bg=BG,
-        fg="#FFD54A",
-        font=info_font,
-    ).pack(side="left", padx=(0, 6))
-
-    app.limit_labels = {}
-    for axis in ["X", "Y", "Z", "A", "B"]:
-        lbl = tk.Label(
-            center,
-            text=axis,
-            bg="#4A4A4A",
-            fg="#FFFFFF",
-            width=2,
-            font=limits_font,
-            relief="solid",
-            bd=1,
-            padx=1,
-            pady=1,
-        )
-        lbl.pack(side="left", padx=2)
-        app.limit_labels[axis] = lbl
