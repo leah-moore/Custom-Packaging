@@ -88,7 +88,7 @@ def build_header(app, parent):
     # RIGHT: STATUS
     # =========================
     # Fixed-width area so long status text doesn't shove the limits around
-    right = tk.Frame(header, bg=BG, width=220)
+    right = tk.Frame(header, bg=BG, width=100)
     right.pack(side="right", fill="y")
     right.pack_propagate(False)
 
