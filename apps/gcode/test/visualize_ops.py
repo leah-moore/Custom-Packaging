@@ -1,6 +1,6 @@
 import matplotlib.pyplot as plt
 from typing import List
-from gcode.machine_ops_types import Operation, RapidMove, ToolDown, ToolUp, CutPath, FeedAdvance
+from apps.gcode.machine_ops_types import Operation, RapidMove, ToolDown, ToolUp, CutPath, FeedAdvance
 
 def visualize_operations(ops: List[Operation], bed_size=(400, 400)):
     fig, ax = plt.subplots(figsize=(10, 8))

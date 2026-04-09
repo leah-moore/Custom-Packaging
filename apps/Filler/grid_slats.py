@@ -36,7 +36,7 @@ from shapely.ops import unary_union
 from shapely.errors import TopologicalError
 import shapely.affinity
 
-from Cardboard.corrugated import plot_corrugated_board
+from apps.Cardboard.corrugated import plot_corrugated_board
 
 # ---------------- USER SETTINGS ----------------
 USE_BLADE_SEGMENTS = False
