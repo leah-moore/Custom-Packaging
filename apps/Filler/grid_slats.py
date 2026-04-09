@@ -719,7 +719,7 @@ def enforce_min_overhang_against_board(cutout, board_rect, min_overhang):
 
 
 def cut_xy_slots(pg_xy, y_levels, x_open, x_stop,
-                 rYmin, rYmax, slotH, edgeSafety, openEps):
+                 rYmin, rYmax, slotH, edgeSafety, openEps, side):
     if pg_xy is None or pg_xy.is_empty:
         return pg_xy
 
@@ -743,19 +743,19 @@ def cut_xy_slots(pg_xy, y_levels, x_open, x_stop,
             x_overlap_R = xR - edgeSafety
             overlapW = x_overlap_R - x_overlap_L
 
-            x_mid = 0.5 * (x_overlap_L + x_overlap_R)
-
             if overlapW <= 0:
                 continue
 
-            if x_open < x_stop:
-                # right board: cut from X=0 → midpoint
-                xs0 = x_open - openEps
+            x_mid = 0.5 * (x_overlap_L + x_overlap_R)
+
+            if side == "right":
+                # XY owns object-facing half on right boards
+                xs0 = x_overlap_L - openEps
                 xs1 = x_mid
             else:
-                # left board: cut from X=0 → midpoint
-                xs1 = x_open + openEps
+                # XY owns object-facing half on left boards
                 xs0 = x_mid
+                xs1 = x_overlap_R + openEps
 
             if xs1 > xs0:
                 rects.append(box(xs0, y1, xs1, y2))
@@ -766,7 +766,7 @@ def cut_xy_slots(pg_xy, y_levels, x_open, x_stop,
     return safe_geom(pg_xy.difference(unary_union(rects)))
 
 def cut_xz_slots(pg_xz, z_levels, x_open, x_stop,
-                 rZmin, rZmax, slotH, edgeSafety, openEps):
+                 rZmin, rZmax, slotH, edgeSafety, openEps, side):
     if pg_xz is None or pg_xz.is_empty:
         return pg_xz
 
@@ -788,21 +788,23 @@ def cut_xz_slots(pg_xz, z_levels, x_open, x_stop,
 
         for s in range(0, len(xInts) - 1, 2):
             xL, xR = xInts[s], xInts[s + 1]
+            
             x_overlap_L = xL + edgeSafety
             x_overlap_R = xR - edgeSafety
-            x_mid = 0.5 * (x_overlap_L + x_overlap_R)
             overlapW = x_overlap_R - x_overlap_L
 
             if overlapW <= 0:
                 continue
 
-            if x_open < x_stop:
-                # right board: cut from FAR EDGE -> midpoint
+            x_mid = 0.5 * (x_overlap_L + x_overlap_R)
+
+            if side == "right":
+                # XZ owns outer half on right boards
                 xs0 = x_mid
-                xs1 = x_stop + openEps
+                xs1 = x_overlap_R + openEps
             else:
-                # left board: cut from FAR EDGE -> midpoint
-                xs0 = x_stop - openEps
+                # XZ owns outer half on left boards
+                xs0 = x_overlap_L - openEps
                 xs1 = x_mid
 
             if xs1 > xs0:
@@ -1188,6 +1190,7 @@ def compute_worldgrid_from_stl(stl_path, n_xy=None, n_xz=None):
             slotH=slotH,
             edgeSafety=edgeSafety,
             openEps=openEps,
+            side = "right",
         )
         for pg in worldXY_right
     ]
@@ -1203,6 +1206,7 @@ def compute_worldgrid_from_stl(stl_path, n_xy=None, n_xz=None):
             slotH=slotH,
             edgeSafety=edgeSafety,
             openEps=openEps,
+            side = "left",
         )
         for pg in worldXY_left
     ]
@@ -1218,6 +1222,7 @@ def compute_worldgrid_from_stl(stl_path, n_xy=None, n_xz=None):
             slotH=slotH,
             edgeSafety=edgeSafety,
             openEps=openEps,
+            side="right",
         )
         for pg in worldXZ_right
     ]
@@ -1233,6 +1238,7 @@ def compute_worldgrid_from_stl(stl_path, n_xy=None, n_xz=None):
             slotH=slotH,
             edgeSafety=edgeSafety,
             openEps=openEps,
+            side="left",
         )
         for pg in worldXZ_left
     ]

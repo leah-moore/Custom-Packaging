@@ -127,7 +127,7 @@ def build_header(app, parent):
     # =========================
     # Overlay in the visual center so it stays centered
     center = tk.Frame(header, bg=BG)
-    center.place(relx=0.63, rely=0.45, anchor="center")
+    center.place(relx=0.75, rely=0.45, anchor="center")
 
     tk.Label(
         center,
