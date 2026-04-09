@@ -1,13 +1,13 @@
 import os
 import sys
+from pathlib import Path
 import time
 import threading
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import inspect
 
-import sys
-from pathlib import Path
+
 
 # add /apps to path (you already have something like this)
 ROOT = Path(__file__).resolve().parents[3]
@@ -26,12 +26,15 @@ from shapely.affinity import translate, rotate as shp_rotate
 
 from apps.gcode.machine_ops_planner import build_machine_ops
 from apps.gantry.pi_teensy_coordination.job_runner import JobRunner
+from apps.gantry.pi_teensy_coordination.roller_controller import RollerController
+from apps.UI.tablet.dxf_handler import DXFDieline
+#from apps.Vision.runner import VisionRunner
 
 from .components.preview_actions_builder import build_preview_actions
+from .components.unified_gcode_controller import UnifiedGCodeController
 from .components.slats_cam_logic import *
 from .theme import BG, apply_theme, FG, PANEL_BG, BTN_NEUTRAL
 from .components.header import build_header
-from .machine_controller import GrblHALController
 from .gcode_parser import GCodeParser
 from .tabs.manual_setup_tab import build_manual_setup_tab
 from .tabs.run_tab import build_run_tab
@@ -42,28 +45,6 @@ from .tabs.slats_tab import build_slats_tab
 from .tabs.slats_cam_tab import build_slats_cam_tab
 from .tabs.diagnostics_tab import build_diagnostics_tab
 from .tabs.photogrammetry_tab import build_photogrammetry_tab
-
-DXFDieline = None
-
-try:
-    from apps.UI.tablet.dxf_handler import DXFDieline
-except Exception:
-    try:
-        import sys
-        from pathlib import Path
-
-        ROOT = Path(__file__).resolve().parents[3]
-        if str(ROOT) not in sys.path:
-            sys.path.insert(0, str(ROOT))
-
-        from apps.UI.tablet.dxf_handler import DXFDieline
-    except Exception as exc:
-        print(f"[DXF] Failed to import DXFDieline: {exc}")
-
-try:
-    from gantry.pi_teensy_coordination.roller_controller import RollerController
-except Exception:
-    RollerController = None
 
 
 LIGHT_ON_CMD = "M8"
@@ -86,7 +67,7 @@ class TouchUI(tk.Tk):
         self.minsize(1024, 600)
         self.configure(bg=BG)
 
-        self.ctrl = GrblHALController()
+        self.ctrl = UnifiedGCodeController()
 
         # Pi-side roller controller
         try:
@@ -102,14 +83,16 @@ class TouchUI(tk.Tk):
         self.waiting_for_ack = False
         self.last_controller_reply = None
 
+        self.job_lock = threading.Lock()
+        self.job_running = False
+        self.job_paused = False
+        self.job_stopping = False
+
         # jogging / jobs
         self.jogging = False
         self.jog_thread = None
         self.roller_jogging = False
         self.roller_jog_thread = None
-        self.job_running = False
-        self.job_paused = False
-        self.job_stopping = False
         self.job_thread = None
         self.jog_mode_var = tk.StringVar(value="step")
 
@@ -170,6 +153,22 @@ class TouchUI(tk.Tk):
 
         # vision / dxf / mesh / slats
         self.vision_images = []
+        # vision runtime
+        self.vision_runner = None
+        self.vision_scan_running = False
+
+        # vision display state
+        self.vision_status_var = tk.StringVar(value="Idle")
+        self.vision_process_var = tk.StringVar(value="No scan yet")
+        self.stitched_info_var = tk.StringVar(value="No stitched image")
+        self.generated_dxf_var = tk.StringVar(value="No generated DXF")
+
+        self.stitched_preview_canvas = None
+        self.process_status_canvas = None
+
+        self._stitched_image = None
+        self._stitched_tk = None
+        self._camera_tk = None
 
         # live USB camera state
         self.camera_running = False
@@ -310,6 +309,8 @@ class TouchUI(tk.Tk):
         # =========================
         # SLATS CAM VARS
         # =========================
+        self.slats_cam_run_dir = None
+
         self.slats_cam_stl_path_var = tk.StringVar(value="(no file selected)")
         self.slats_cam_status_var = tk.StringVar(value="Ready")
         self.slats_cam_slats_info_var = tk.StringVar(value="No slats loaded")
@@ -526,31 +527,39 @@ class TouchUI(tk.Tk):
 
         # KEEP REFERENCE (critical)
         self.camera_preview_canvas.image = tk_img
-        
-    
+
     def _connect(self) -> None:
         port = self.port_var.get().strip()
         baud = self.baud_var.get().strip()
+
         if not port:
             messagebox.showerror("Error", "Select a serial port.")
             return
+
         try:
             baud_int = int(baud)
         except ValueError:
             messagebox.showerror("Error", "Invalid baud rate.")
             return
+
         try:
-            self.ctrl.connect(port, baud_int)
+            self.ctrl.port = port
+            self.ctrl.baudrate = baud_int
+            self.ctrl.connect()
+
             self.polling = True
             self.in_alarm = False
             self.machine_state = "Unknown"
             self.status_text.set(f"Connected: {port} @ {baud_int}")
+
             if hasattr(self, "connection_status_var"):
                 self.connection_status_var.set("Connected")
+
             self._append_console(f"> Connected to {port} @ {baud_int}")
+
         except Exception as exc:
             messagebox.showerror("Connection Error", str(exc))
-
+    
     def _disconnect(self) -> None:
         self._stop_all_motion_and_jobs()
         self._stop_roller_jog()
@@ -562,7 +571,7 @@ class TouchUI(tk.Tk):
         self.state_text.set("State: --")
         self.machine_pos_text.set("MPos: --")
         self.work_pos_text.set("WPos: --")
-        self.job_progress_text.set("Job: idle")
+        self.after(0, lambda: self.job_progress_text.set("Job: idle"))
         self.limit_switch_text.set("Limits: --")
         if hasattr(self, "connection_status_var"):
             self.connection_status_var.set("Disconnected")
@@ -578,14 +587,17 @@ class TouchUI(tk.Tk):
     def _send_line(self, line: str) -> None:
         if not self.ctrl.is_connected:
             return
-        self.ctrl.write_line(line)
-        self._append_console(f">> {line}")
+        try:
+            self.ctrl.send_line(line)
+            self._append_console(f">> {line}")
+        except Exception as e:
+            self._append_console(f"[SEND ERROR] {e}")
 
     def _send_mdi(self) -> None:
         line = self.mdi_var.get().strip()
         if not line:
             return
-        if self.job_running:
+        if self.is_job_running():
             messagebox.showwarning("Busy", "Cannot send MDI while a job is running.")
             return
         self._send_line(line)
@@ -624,12 +636,12 @@ class TouchUI(tk.Tk):
             self._append_console(">> [RESET] Ctrl-X")
 
     def _home(self) -> None:
-        if self.job_running:
+        if self.is_job_running():
             return
         self._send_line("$H")
 
     def _unlock(self) -> None:
-        if self.job_running:
+        if self.is_job_running():
             return
         self.in_alarm = False
         self._send_line("$X")
@@ -640,9 +652,9 @@ class TouchUI(tk.Tk):
     def _force_stop(self) -> None:
         self._append_console("\n!!! FORCE STOP !!!\n")
         self.jogging = False
-        self.job_running = False
-        self.job_paused = False
-        self.job_stopping = True
+        self.set_job_running(False)
+        self.set_job_paused(False)
+        self.set_job_stopping(True)
         self.waiting_for_ack = False
         self._cancel_jog()
         self._stop_roller_jog()
@@ -659,19 +671,43 @@ class TouchUI(tk.Tk):
         if hasattr(self, "jog_status_var"):
             self.jog_status_var.set("JOG: IDLE")
 
+    def set_job_running(self, value: bool) -> None:
+        with self.job_lock:
+            self.job_running = value
+
+    def is_job_running(self) -> bool:
+        with self.job_lock:
+            return self.job_running
+
+    def set_job_paused(self, value: bool) -> None:
+        with self.job_lock:
+            self.job_paused = value
+
+    def is_job_paused(self) -> bool:
+        with self.job_lock:
+            return self.job_paused
+
+    def set_job_stopping(self, value: bool) -> None:
+        with self.job_lock:
+            self.job_stopping = value
+
+    def is_job_stopping(self) -> bool:
+        with self.job_lock:
+            return self.job_stopping
+
     # =========================
     # OUTPUTS
     # =========================
     def _light_on(self) -> None:
-        if not self.job_running:
+        if not self.is_job_running():
             self._send_line(LIGHT_ON_CMD)
 
     def _light_off(self) -> None:
-        if not self.job_running:
+        if not self.is_job_running():
             self._send_line(LIGHT_OFF_CMD)
 
     def _spindle_on(self) -> None:
-        if self.job_running:
+        if self.is_job_running():
             return
         try:
             raw = self.spindle_speed_var.get().strip()
@@ -688,11 +724,13 @@ class TouchUI(tk.Tk):
             self.spindle_status_var.set(f"Spindle: ON ({speed} RPM)")
 
     def _spindle_off(self) -> None:
-        if not self.job_running:
+        if not self.is_job_running():
             self._send_line(SPINDLE_OFF_CMD)
 
         if hasattr(self, "spindle_status_var"):
             self.spindle_status_var.set("Spindle: OFF")
+
+    
 
     # =========================
     # JOGGING
@@ -700,7 +738,7 @@ class TouchUI(tk.Tk):
     def _safe_to_jog(self) -> bool:
         if not self.ctrl.is_connected:
             return False
-        if self.job_running:
+        if self.is_job_running():
             return False
         if self.in_alarm:
             return False
@@ -756,7 +794,7 @@ class TouchUI(tk.Tk):
             step, axis_feed = self._get_jog_params_for_axis(axis)
             if feed is None:
                 feed = axis_feed
-            parts.append(f"{axis}{direction * abs(step):.3f}")
+            parts.append(f"{axis}{direction * abs(step):.2f}")
 
         if not parts or feed is None:
             return None
@@ -787,19 +825,14 @@ class TouchUI(tk.Tk):
         mode = (self.jog_mode_var.get() or "step").strip().lower()
 
         if mode == "continuous":
-            # TOGGLE behavior
             if self.jogging or self.roller_jogging:
                 self._cancel_jog()
                 self._stop_roller_jog()
-                if self.ctrl.is_connected:
-                    self.ctrl.send_realtime(b"\x85")  # jog cancel
                 return
 
             self.active_jog_button = btn
             btn.config(bg="#FFBE6B")
-            # start jogging
             self._begin_continuous_jog(axis_moves)
-            self._arm_jog_watchdog()
 
     def _begin_continuous_jog(self, axis_moves: dict) -> None:
         self._jog_hold_after_id = None
@@ -830,18 +863,15 @@ class TouchUI(tk.Tk):
             self._jog_hold_after_id = None
 
         axis_moves = self._pending_jog_axis_moves
-        mode = (self.jog_mode_var.get() or "step").strip().lower()
 
-        if mode == "continuous":
-            # do nothing on release (touchscreens unreliable)
-            pass
+        if mode == "step" and axis_moves:
+            self._single_step_jog(axis_moves)
 
         self._jog_hold_started = False
         self._pending_jog_axis_moves = None
         self._pending_jog_button = None
 
     def _start_continuous_jog(self, axis_moves: dict) -> None:
-        
         if "ROLLER" in axis_moves:
             return
         if not self._safe_to_jog() or self.jogging:
@@ -850,22 +880,30 @@ class TouchUI(tk.Tk):
         self.jogging = True
 
         axis_name = ", ".join(axis_moves.keys())
-        self.jog_status_var.set(f"JOGGING: {axis_name}+")
+        if hasattr(self, "jog_status_var"):
+            self.jog_status_var.set(f"JOGGING: {axis_name}")
 
         def jog_loop() -> None:
             while self.jogging and self.ctrl.is_connected:
+                if not self._safe_to_jog():
+                    break
+
                 try:
                     cmd = self._build_jog_command(axis_moves)
                     if cmd:
-                        self._send_line(cmd)
+                        self.ctrl.write_raw(cmd + "\n")
                 except Exception:
-                    pass
-                time.sleep(self.JOG_REPEAT_S)
+                    break
+
+                time.sleep(0.05)
+
+            self.jogging = False
+            self.after(0, self._cancel_jog)
 
         self.jog_thread = threading.Thread(target=jog_loop, daemon=True)
         self.jog_thread.start()
 
-    def _cancel_jog(self) -> None:
+    def _cancel_jog(self, send_hold: bool = True) -> None:
         self.jogging = False
         self._stop_roller_jog()
         self._clear_jog_watchdog()
@@ -882,7 +920,9 @@ class TouchUI(tk.Tk):
 
         if self.ctrl.is_connected:
             try:
-                self.ctrl.send_realtime(b"\x85")
+                self.ctrl.send_realtime(b"\x85")  # jog cancel
+                if send_hold:
+                    self.ctrl.send_realtime(b"!")  # optional feed hold
             except Exception:
                 pass
 
@@ -992,9 +1032,9 @@ class TouchUI(tk.Tk):
     def _stop_all_motion_and_jobs(self) -> None:
         self.jogging = False
         self.roller_jogging = False
-        self.job_running = False
-        self.job_paused = False
-        self.job_stopping = True
+        self.set_job_running(False)
+        self.set_job_paused(False)
+        self.set_job_stopping(True)
 
     # =========================
     # PHOTOGRAMMETRY
@@ -1524,7 +1564,7 @@ class TouchUI(tk.Tk):
             self._append_console(f"[LOAD CURRENT WINDOW ERROR] {exc}")
 
     def _start_slats_job(self):
-        if self.job_running:
+        if self.is_job_running():
             return
 
         if not self.ctrl.is_connected:
@@ -1541,20 +1581,27 @@ class TouchUI(tk.Tk):
                 )
                 return
 
+            roller_speed_mm_s = float(self.roller_feed_var.get()) / 60.0
+
         except Exception as exc:
             messagebox.showerror("Run Error", f"Failed to build job: {exc}")
             return
 
-        self.job_running = True
-        self.job_stopping = False
-        self.job_paused = False
+        self._cancel_jog()
+        self._stop_roller_jog()
+        self._clear_pending_jog()
+
+        self.set_job_running(True)
+        self.set_job_stopping(False)
+        self.set_job_paused(False)
+        self._set_controls_enabled(False)
         self.job_progress_text.set("Job: running")
         self._append_console("> Running slats job")
 
         runner = JobRunner(
-            teensy=self.ctrl,
+            controller=self.ctrl,
             rollers=self.rollers,
-            roller_speed_mm_s=float(self.roller_feed_var.get()) / 60.0,
+            roller_speed_mm_s=roller_speed_mm_s,
             log_fn=self._append_console,
         )
 
@@ -1562,15 +1609,41 @@ class TouchUI(tk.Tk):
 
         def worker():
             try:
-                runner.run(ops)
-                self._append_console("> Job complete")
+                if self.is_job_stopping():
+                    self._append_console("> Slats job stopped before start")
+                    return
+
+                while self.is_job_paused() and not self.is_job_stopping():
+                    time.sleep(0.05)
+
+                if self.is_job_stopping():
+                    self._append_console("> Slats job stopped")
+                    return
+
+                runner.run(
+                    ops,
+                    should_stop=self.is_job_stopping,
+                    should_pause=self.is_job_paused,
+                    job_timeout_s=2 * 60 * 60,
+                )
+
+                if self.is_job_stopping():
+                    self._append_console("> Slats job stopped")
+                else:
+                    self.after(0, lambda: self._append_console("> Job complete"))
+
             except Exception as exc:
                 self._append_console(f"[JOB ERROR] {exc}")
-            finally:
-                self.job_running = False
-                self.job_progress_text.set("Job: idle")
 
-        threading.Thread(target=worker, daemon=True).start()
+            finally:
+                self.set_job_running(False)
+                self.set_job_paused(False)
+                self.set_job_stopping(False)
+                self.after(0, lambda: self._set_controls_enabled(True))
+                self.after(0, lambda: self.job_progress_text.set("Job: idle"))
+
+        self.job_thread = threading.Thread(target=worker, daemon=True)
+        self.job_thread.start()
         
 
     def _pick_packed_slat(self, x, y):
@@ -1660,7 +1733,7 @@ class TouchUI(tk.Tk):
         self._update_window_info()
 
     def _start_gcode_job(self) -> None:
-        if self.job_running:
+        if self.is_job_running():
             return
 
         if not self.ctrl.is_connected:
@@ -1671,30 +1744,47 @@ class TouchUI(tk.Tk):
             messagebox.showerror("Run Error", "No G-code loaded.")
             return
 
-        self.job_stopping = False
-        self.job_paused = False
-        self.job_running = True
+        self._cancel_jog()
+        self._stop_roller_jog()
+        self._clear_pending_jog()
+
+        self.set_job_stopping(False)
+        self.set_job_paused(False)
+        self.set_job_running(True)
+        self._set_controls_enabled(False)
         self.current_line_index = 0
         self.job_progress_text.set("Job: running")
         self._append_console("> Running raw G-code")
 
+        job_start_time = time.time()
+        max_job_duration_seconds = 3600 * 2  # 2 hours max
+
         def worker():
             try:
-                for i, line in enumerate(self.gcode_lines):
-                    if self.job_stopping:
+                for i, raw_line in enumerate(self.gcode_lines, start=1):
+                    if self.is_job_stopping():
                         break
 
                     if not self.ctrl.is_connected:
-                        self._append_console("[JOB ERROR] Lost connection to controller")
-                        break
+                        self.after(0, lambda: self._append_console("[JOB ERROR] Lost connection to controller"))
+                        self.after(0, lambda: self._append_console("[RECOVERY] Attempting reconnect in 2 seconds..."))
+                        time.sleep(2)
+                        try:
+                            self.ctrl.disconnect()
+                            time.sleep(0.2)
+                            self.ctrl.connect()
+                            self.after(0, lambda: self._append_console("[RECOVERY] Reconnected! Resuming job..."))
+                        except Exception as e:
+                            self.after(0, lambda e=e: self._append_console(f"[JOB ERROR] Reconnect failed: {e}"))
+                            break
 
-                    while self.job_paused and not self.job_stopping:
+                    while self.is_job_paused() and not self.is_job_stopping():
                         time.sleep(0.05)
 
-                    if self.job_stopping:
+                    if self.is_job_stopping():
                         break
 
-                    line = line.strip()
+                    line = raw_line.strip()
 
                     if not line:
                         self.after(0, lambda idx=i: self._set_gcode_line_status(idx, "SKIP"))
@@ -1702,17 +1792,49 @@ class TouchUI(tk.Tk):
 
                     self.current_line_index = i
                     self.after(0, lambda idx=i: self._set_gcode_line_status(idx, "RUN"))
-                    self._append_console(f">> {line}")
+                    self.after(0, lambda l=line: self._append_console(f">> {l}"))
+
+                    elapsed = time.time() - job_start_time
+                    if elapsed > max_job_duration_seconds:
+                        self.after(
+                            0,
+                            lambda e=elapsed: self._append_console(
+                                f"[JOB ERROR] Job timeout after {e:.0f}s "
+                                f"({int(e / 60)}m {int(e % 60)}s)"
+                            ),
+                        )
+                        if self.ctrl.is_connected:
+                            self.ctrl.send_realtime(b"\x18")
+                            time.sleep(0.2)
+                        break
 
                     try:
-                        reply = self.ctrl.send_line_and_wait_ok(line, timeout=10.0)
+                        if "m3" in line.lower() or "m4" in line.lower():
+                            self.after(
+                                0,
+                                lambda l=line: self._append_console(f">> [SPINDLE] Starting spindle: {l.strip()}"),
+                            )
+
+                        reply = self.ctrl.send_line(line, timeout=10.0)
+
+                        if "m3" in line.lower() or "m4" in line.lower():
+                            self.after(0, lambda: self._append_console("[SPINDLE] Waiting for spindle to reach speed..."))
+                            time.sleep(1.0)
+
                     except TimeoutError:
                         self.after(0, lambda idx=i: self._set_gcode_line_status(idx, "TIMEOUT"))
-                        self._append_console("[JOB ERROR] Timeout waiting for OK")
+                        self.after(0, lambda: self._append_console("[JOB ERROR] Timeout waiting for OK"))
+                        if self.ctrl.is_connected:
+                            self.ctrl.send_realtime(b"\x18")
+                            time.sleep(0.2)
                         break
+
                     except Exception as exc:
                         self.after(0, lambda idx=i: self._set_gcode_line_status(idx, "ERR"))
-                        self._append_console(f"[JOB ERROR] {exc}")
+                        self.after(0, lambda exc=exc: self._append_console(f"[JOB ERROR] {exc}"))
+                        if self.ctrl.is_connected:
+                            self.ctrl.send_realtime(b"\x18")
+                            time.sleep(0.2)
                         break
 
                     low = reply.strip().lower()
@@ -1721,38 +1843,49 @@ class TouchUI(tk.Tk):
                         self.after(0, lambda idx=i: self._set_gcode_line_status(idx, "OK"))
                     elif low.startswith("alarm"):
                         self.after(0, lambda idx=i: self._set_gcode_line_status(idx, "ERR"))
-                        self._append_console(f"[ALARM] {reply}")
+                        self.after(0, lambda r=reply: self._append_console(f"[ALARM] {r}"))
                         break
                     elif low.startswith("error"):
                         self.after(0, lambda idx=i: self._set_gcode_line_status(idx, "ERR"))
-                        self._append_console(f"[JOB ERROR] {reply}")
+                        self.after(0, lambda r=reply: self._append_console(f"[JOB ERROR] {r}"))
                         break
                     else:
                         self.after(0, lambda idx=i: self._set_gcode_line_status(idx, "ERR"))
-                        self._append_console(f"[JOB ERROR] Unexpected reply: {reply}")
+                        self.after(0, lambda r=reply: self._append_console(f"[JOB ERROR] Unexpected reply: {r}"))
                         break
 
-                if self.job_stopping:
-                    self._append_console("> Job stopped")
+                if self.is_job_stopping():
+                    self.after(0, lambda: self._append_console("> Job stopped"))
                 else:
-                    self._append_console("> Job complete")
+                    self.after(0, lambda: self._append_console("> Job complete"))
 
             except Exception as exc:
-                self._append_console(f"[JOB ERROR] {exc}")
+                self.after(0, lambda exc=exc: self._append_console(f"[JOB ERROR] {exc}"))
 
             finally:
-                self.job_running = False
-                self.job_paused = False
-                self.job_stopping = False
-                self.job_progress_text.set("Job: idle")
+                self.set_job_running(False)
+                self.set_job_paused(False)
+                self.set_job_stopping(False)
+                self.after(0, lambda: self._set_controls_enabled(True))
+                self.after(0, lambda: self.job_progress_text.set("Job: idle"))
 
         self.job_thread = threading.Thread(target=worker, daemon=True)
         self.job_thread.start()
 
-
     def _pause_gcode_job(self) -> None:
-        if self.job_running:
-            self.job_paused = True
+        should_hold = False
+
+        with self.job_lock:
+            if self.job_running and not self.job_paused:
+                self.job_paused = True
+                should_hold = True
+            elif self.job_paused:
+                self._append_console("[WARN] Job already paused")
+                return
+            else:
+                return
+
+        if should_hold:
             self.ctrl.send_realtime(b"!")
             self._append_console(">> [JOB HOLD] !")
 
@@ -1797,35 +1930,30 @@ class TouchUI(tk.Tk):
                 )
             )
 
-
     def _resume_gcode_job(self) -> None:
-        if self.job_running:
-            self.job_paused = False
+        should_resume = False
+
+        with self.job_lock:
+            if self.job_running and self.job_paused:
+                self.job_paused = False
+                should_resume = True
+            elif not self.job_paused:
+                self._append_console("[WARN] Job not paused")
+                return
+            else:
+                return
+
+        if should_resume:
             self.ctrl.send_realtime(b"~")
             self._append_console(">> [JOB RESUME] ~")
 
     def _stop_gcode_job(self) -> None:
-        if self.job_running:
-            self.job_stopping = True
-            self.job_paused = False
-
-            if hasattr(self, "_job_runner") and self._job_runner is not None:
-                try:
-                    self._job_runner.request_stop()
-                except Exception:
-                    pass
-
-            try:
-                self._stop_roller_jog()
-            except Exception:
-                pass
-
-            if self.ctrl.is_connected:
-                self.ctrl.send_realtime(b"\x18")
-
-            self.job_running = False
-            self.job_progress_text.set("Job: idle")
-            self._append_console(">> [JOB STOP] Ctrl-X + mixed job stop")
+        if self.is_job_running():
+            self.set_job_stopping(True)
+            self.set_job_paused(False)
+            self.ctrl.send_realtime(b"!")
+            self.ctrl.send_realtime(b"\x18")
+            self._append_console(">> [JOB STOP] Hold + Reset")
                 
     # =========================
     # PREVIEW
@@ -1865,13 +1993,13 @@ class TouchUI(tk.Tk):
             pass
 
     def _set_preview_dro_xyz(self, x, y, z, dx=0.0, dy=0.0):
-        if self.job_running:
+        if self.is_job_running():
             return
 
         # XYZ
-        self.work_pos_x_text.set(f"{x:.3f}")
-        self.work_pos_y_text.set(f"{y:.3f}")
-        self.work_pos_z_text.set(f"{z:.3f}")
+        self.work_pos_x_text.set(f"{x:.2f}")
+        self.work_pos_y_text.set(f"{y:.2f}")
+        self.work_pos_z_text.set(f"{z:.2f}")
 
         # Blade (A or B)
         angle = self._compute_blade_angle(dx, dy)
@@ -2445,24 +2573,241 @@ class TouchUI(tk.Tk):
     # =========================
     # VISION / DXF
     # =========================
+    def _ensure_vision_runner(self):
+        if getattr(self, "vision_runner", None) is None:
+            try:
+                from .components.vision_dxf_logic import VisionRunner
+            except Exception as exc:
+                raise RuntimeError(
+                    "Could not import apps.Vision.runner.VisionRunner"
+                ) from exc
+
+            self.vision_runner = VisionRunner()
+
+        return self.vision_runner
+
     def _start_live_camera(self) -> None:
-        if hasattr(self, "camera_info_var"):
-            self.camera_info_var.set("Camera running (stub)")
-        if hasattr(self, "vision_dxf_status_var"):
-            self.vision_dxf_status_var.set("Camera running")
+        try:
+            runner = self._ensure_vision_runner()
+            runner.start_camera()
+
+            self.camera_running = True
+
+            if hasattr(self, "camera_info_var"):
+                self.camera_info_var.set("Camera running")
+            if hasattr(self, "vision_dxf_status_var"):
+                self.vision_dxf_status_var.set("Camera running")
+            if hasattr(self, "vision_status_var"):
+                self.vision_status_var.set("Camera running")
+            if hasattr(self, "vision_process_var"):
+                self.vision_process_var.set("Camera stream active")
+
+            self._append_console("> Vision camera started")
+            self.after(50, self._poll_vision_outputs)
+
+        except Exception as exc:
+            self.camera_running = False
+
+            if hasattr(self, "camera_info_var"):
+                self.camera_info_var.set("Camera error")
+            if hasattr(self, "vision_dxf_status_var"):
+                self.vision_dxf_status_var.set("Camera error")
+            if hasattr(self, "vision_status_var"):
+                self.vision_status_var.set(f"Camera error: {exc}")
+            if hasattr(self, "vision_process_var"):
+                self.vision_process_var.set(str(exc))
+
+            self._append_console(f"[VISION CAMERA ERROR] {exc}")
 
     def _stop_live_camera(self) -> None:
+        try:
+            if getattr(self, "vision_runner", None) is not None:
+                self.vision_runner.stop_camera()
+        except Exception as exc:
+            self._append_console(f"[VISION CAMERA STOP ERROR] {exc}")
+
+        self.camera_running = False
+
         if hasattr(self, "camera_info_var"):
             self.camera_info_var.set("Camera stopped")
         if hasattr(self, "vision_dxf_status_var"):
             self.vision_dxf_status_var.set("Idle")
+        if hasattr(self, "vision_status_var"):
+            self.vision_status_var.set("Camera stopped")
+        if hasattr(self, "vision_process_var"):
+            self.vision_process_var.set("Camera stopped")
+
+        self._append_console("> Vision camera stopped")
+
+    def _start_vision_scan(self) -> None:
+        try:
+            runner = self._ensure_vision_runner()
+
+            dxf_path = None
+            if getattr(self, "dxf_file_path", None):
+                dxf_path = str(self.dxf_file_path)
+
+            runner.start_scan(dxf_path=dxf_path)
+            self.vision_scan_running = True
+
+            if hasattr(self, "vision_dxf_status_var"):
+                self.vision_dxf_status_var.set("Processing...")
+            if hasattr(self, "vision_status_var"):
+                self.vision_status_var.set("Processing...")
+            if hasattr(self, "vision_process_var"):
+                self.vision_process_var.set("Scan started")
+            if hasattr(self, "vision_result_var"):
+                self.vision_result_var.set("Vision scan running")
+
+            self._append_console("> Vision scan started")
+            self.after(50, self._poll_vision_outputs)
+
+        except Exception as exc:
+            self.vision_scan_running = False
+
+            if hasattr(self, "vision_dxf_status_var"):
+                self.vision_dxf_status_var.set("Scan error")
+            if hasattr(self, "vision_status_var"):
+                self.vision_status_var.set(f"Scan error: {exc}")
+            if hasattr(self, "vision_process_var"):
+                self.vision_process_var.set(str(exc))
+            if hasattr(self, "vision_result_var"):
+                self.vision_result_var.set(str(exc))
+
+            self._append_console(f"[VISION SCAN ERROR] {exc}")
+
+    def _stop_vision_scan(self) -> None:
+        try:
+            if getattr(self, "vision_runner", None) is not None:
+                self.vision_runner.stop_scan()
+        except Exception as exc:
+            self._append_console(f"[VISION STOP ERROR] {exc}")
+
+        self.vision_scan_running = False
+
+        if hasattr(self, "vision_dxf_status_var"):
+            self.vision_dxf_status_var.set("Idle")
+        if hasattr(self, "vision_status_var"):
+            self.vision_status_var.set("Scan stopped")
+        if hasattr(self, "vision_process_var"):
+            self.vision_process_var.set("Scan stopped")
+        if hasattr(self, "vision_result_var"):
+            self.vision_result_var.set("Vision scan stopped")
+
+        self._append_console("> Vision scan stopped")
 
     def _run_dxf_vision_pipeline(self) -> None:
-        if hasattr(self, "vision_dxf_status_var"):
-            self.vision_dxf_status_var.set("Running...")
-        if hasattr(self, "vision_result_var"):
-            self.vision_result_var.set("DXF vision pipeline not integrated yet")
-        self._append_console("> Run DXF vision pipeline (stub)")
+        # backward-compatible alias for any existing button bindings
+        self._start_vision_scan()
+
+    def _poll_vision_outputs(self) -> None:
+        runner = getattr(self, "vision_runner", None)
+        if runner is None:
+            return
+
+        try:
+            status = runner.get_status() or {}
+
+            phase = status.get("phase", "Idle")
+            detail = status.get("detail", "")
+            generated_dxf_path = status.get("generated_dxf_path")
+            stitched_image = runner.get_latest_stitched_image()
+
+            if hasattr(self, "vision_dxf_status_var"):
+                self.vision_dxf_status_var.set(phase)
+            if hasattr(self, "vision_status_var"):
+                self.vision_status_var.set(phase)
+            if hasattr(self, "vision_process_var"):
+                self.vision_process_var.set(detail or phase)
+
+            if generated_dxf_path:
+                if hasattr(self, "generated_dxf_var"):
+                    self.generated_dxf_var.set(f"Generated DXF: {generated_dxf_path}")
+                if hasattr(self, "vision_result_var"):
+                    self.vision_result_var.set(f"DXF generated: {generated_dxf_path}")
+
+            if stitched_image is not None:
+                self._stitched_image = stitched_image
+                if hasattr(self, "stitched_info_var"):
+                    self.stitched_info_var.set("Stitched image ready")
+                self._update_stitched_canvas()
+
+            scan_active = bool(status.get("scan_running", False))
+            self.vision_scan_running = scan_active
+
+        except Exception as exc:
+            self._append_console(f"[VISION POLL ERROR] {exc}")
+            if hasattr(self, "vision_status_var"):
+                self.vision_status_var.set(f"Poll error: {exc}")
+
+        if self.vision_scan_running:
+            self.after(100, self._poll_vision_outputs)
+
+    def _update_camera_canvas(self):
+        if getattr(self, "_camera_frame", None) is None:
+            return
+        if not hasattr(self, "camera_preview_canvas") or self.camera_preview_canvas is None:
+            return
+
+        try:
+            import cv2
+            from PIL import Image, ImageTk
+
+            frame = self._camera_frame
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            img = Image.fromarray(rgb)
+
+            w = self.camera_preview_canvas.winfo_width()
+            h = self.camera_preview_canvas.winfo_height()
+
+            if w > 0 and h > 0:
+                img = img.resize((w, h))
+
+            tk_img = ImageTk.PhotoImage(img)
+
+            self.camera_preview_canvas.delete("all")
+            self.camera_preview_canvas.create_image(0, 0, anchor="nw", image=tk_img)
+            self.camera_preview_canvas.image = tk_img
+
+        except Exception as exc:
+            self._append_console(f"[CAMERA CANVAS ERROR] {exc}")
+
+    def _update_stitched_canvas(self):
+        if getattr(self, "_stitched_image", None) is None:
+            return
+        if not hasattr(self, "stitched_preview_canvas") or self.stitched_preview_canvas is None:
+            return
+
+        try:
+            import cv2
+            import numpy as np
+            from PIL import Image, ImageTk
+
+            img = self._stitched_image
+
+            if isinstance(img, np.ndarray):
+                if len(img.shape) == 2:
+                    pil = Image.fromarray(img)
+                else:
+                    rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                    pil = Image.fromarray(rgb)
+            else:
+                pil = img
+
+            w = self.stitched_preview_canvas.winfo_width()
+            h = self.stitched_preview_canvas.winfo_height()
+
+            if w > 0 and h > 0:
+                pil = pil.resize((w, h))
+
+            tk_img = ImageTk.PhotoImage(pil)
+
+            self.stitched_preview_canvas.delete("all")
+            self.stitched_preview_canvas.create_image(0, 0, anchor="nw", image=tk_img)
+            self.stitched_preview_canvas.image = tk_img
+
+        except Exception as exc:
+            self._append_console(f"[STITCHED CANVAS ERROR] {exc}")
 
     def _load_dxf_file(self) -> None:
         path = filedialog.askopenfilename(
@@ -2656,7 +3001,6 @@ class TouchUI(tk.Tk):
                 fill="#FF8888",
                 justify="center",
             )
-
 
     def _on_dxf_pan_start(self, event):
         self._dxf_pan_last_x = event.x
@@ -3723,8 +4067,8 @@ class TouchUI(tk.Tk):
 
             sheet_raw, holes_raw = sheets[sheet_index]
 
-            cardboard_width_mm = float(self.slats_cam_cardboard_width_mm.get() or "300.0")
-            feed_window_len = float(self.slats_cam_feed_window_mm.get() or "200.0")
+            cardboard_width_mm = float(self.slats_cam_cardboard_width_mm.get() or "280.0")
+            feed_window_len = float(self.slats_cam_feed_window_mm.get() or "120.0")
             edge_margin_mm = float(self.slats_cam_edge_margin_mm.get() or "5.0")
             cut_clearance_mm = float(self.slats_cam_cut_clearance_mm.get() or "1.0")
 
@@ -3756,8 +4100,8 @@ class TouchUI(tk.Tk):
             self.sheet_mm = sheet_mm
             self.holes_mm = holes_mm
             self.usable_region_mm = usable_region_mm
-            self.gantry_width_x_var.set(f"{cardboard_width_mm:.3f}")
-            self.feed_window_y_var.set(f"{feed_window_len:.3f}")
+            self.gantry_width_x_var.set(f"{cardboard_width_mm:.1}")
+            self.feed_window_y_var.set(f"{feed_window_len:.1f}")
             self._rebuild_feed_windows()
 
             self.slats_cam_status_var.set(f"DXF loaded ({len(sheets)} sheet candidates)")
@@ -3849,8 +4193,8 @@ class TouchUI(tk.Tk):
             if g is not None and not g.is_empty:
                 geoms.append(g)
 
-        gantry_w = float(self.gantry_width_x_var.get() or self.slats_cam_cardboard_width_mm.get() or "300.0")
-        gantry_h = float(self.feed_window_y_var.get() or self.slats_cam_feed_window_mm.get() or "200.0")
+        gantry_w = float(self.gantry_width_x_var.get() or self.slats_cam_cardboard_width_mm.get() or "280.0")
+        gantry_h = float(self.feed_window_y_var.get() or self.slats_cam_feed_window_mm.get() or "120.0")
         geoms.append(box(-gantry_w / 2.0, -gantry_h / 2.0, gantry_w / 2.0, gantry_h / 2.0))
 
         u = unary_union(geoms)
@@ -4136,8 +4480,8 @@ class TouchUI(tk.Tk):
         ax1, ay1 = to_canvas(0.0, 10000)
         c.create_line(ax0, ay0, ax1, ay1, fill="#355535", dash=(3, 4))
 
-        gantry_w = float(self.gantry_width_x_var.get() or self.slats_cam_cardboard_width_mm.get() or "300.0")
-        gantry_h = float(self.feed_window_y_var.get() or self.slats_cam_feed_window_mm.get() or "200.0")
+        gantry_w = float(self.gantry_width_x_var.get() or self.slats_cam_cardboard_width_mm.get() or "280.0")
+        gantry_h = float(self.feed_window_y_var.get() or self.slats_cam_feed_window_mm.get() or "120.0")
         gx0, gy0 = to_canvas(-gantry_w / 2.0, -gantry_h / 2.0)
         gx1, gy1 = to_canvas(gantry_w / 2.0, gantry_h / 2.0)
         c.create_rectangle(gx0, gy1, gx1, gy0, outline="#4A7BFF", width=2)
@@ -4177,8 +4521,8 @@ class TouchUI(tk.Tk):
 
     def _use_blank_sheet(self):
         try:
-            cardboard_width_mm = float(self.slats_cam_cardboard_width_mm.get() or "300.0")
-            feed_window_len = float(self.slats_cam_feed_window_mm.get() or "200.0")
+            cardboard_width_mm = float(self.slats_cam_cardboard_width_mm.get() or "120.0")
+            feed_window_len = float(self.slats_cam_feed_window_mm.get() or "120.0")
             edge_margin_mm = float(self.slats_cam_edge_margin_mm.get() or "5.0")
 
             length_mm = max(feed_window_len * 5.0, feed_window_len + 1.0)
@@ -4230,8 +4574,8 @@ class TouchUI(tk.Tk):
 
             sheet_raw, holes_raw = sheets[sheet_index]
 
-            cardboard_width_mm = float(self.slats_cam_cardboard_width_mm.get() or "300.0")
-            feed_window_len = float(self.slats_cam_feed_window_mm.get() or "200.0")
+            cardboard_width_mm = float(self.slats_cam_cardboard_width_mm.get() or "280.0")
+            feed_window_len = float(self.slats_cam_feed_window_mm.get() or "120.0")
             edge_margin_mm = float(self.slats_cam_edge_margin_mm.get() or "5.0")
             cut_clearance_mm = float(self.slats_cam_cut_clearance_mm.get() or "1.0")
 
@@ -4331,7 +4675,7 @@ class TouchUI(tk.Tk):
 
     def _generate_current_window_gcode(self):
         try:
-            from slat_toolpaths import geometry_to_knife_segments, chain_segments
+            from apps.gcode.slat_toolpaths import geometry_to_knife_segments, chain_segments
             from gcode.emit_gcode import emit_gcode
             from apps.gcode.machine_ops_types import (
                 RapidMove, ToolDown, ToolUp, CutPath, PivotAction
@@ -4416,11 +4760,34 @@ class TouchUI(tk.Tk):
             gcode = emit_gcode(ops, feed_window_y=gantry_h)
 
             idx, x0, x1 = window
-            self._load_gcode_from_string(gcode, display_name=f"Window {idx+1:02d}")
+            default_name = f"slats_window_{idx+1:02d}_{x0:.1f}_{x1:.1f}.nc"
 
+            from datetime import datetime
+            from pathlib import Path
+
+            if self.slats_cam_run_dir is None:
+                run_id = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+                self.slats_cam_run_dir = Path("data/slats_cam") / run_id
+                self.slats_cam_run_dir.mkdir(parents=True, exist_ok=True)
+
+            out_path = self.slats_cam_run_dir / default_name
+
+            Path(out_path).write_text(gcode)
+
+            self.gcode_lines = [line for line in gcode.splitlines() if line.strip()]
+            self.file_text.set(Path(out_path).name)
+            self.slats_cam_status_var.set(f"G-code generated for window {idx+1}")
+
+            self._append_console(f"> Generated single-window G-code: {out_path}")
             self._append_console(
-                f"> Window {idx+1} G-code | parts={len(machine_geoms)} | paths={len(knife_paths)}"
+                f"> Window {idx+1}: x=[{x0:.1f}, {x1:.1f}] | "
+                f"parts={len(machine_geoms)} | paths={len(toolpaths['knife'])} | ops={len(ops)}"
             )
+
+            try:
+                self._load_gcode_from_string(gcode, display_name=Path(out_path).name)
+            except Exception:
+                pass
 
         except Exception as exc:
             messagebox.showerror("G-code Error", str(exc))
@@ -4435,7 +4802,7 @@ class TouchUI(tk.Tk):
             # -----------------------------------------
             # 1) build FULL geometry (no window clipping)
             # -----------------------------------------
-            from slat_toolpaths import geometry_to_knife_segments, chain_segments
+            from apps.gcode.slat_toolpaths import geometry_to_knife_segments, chain_segments
 
             world_geoms = []
             for item in self.packed_items.values():
@@ -4468,8 +4835,8 @@ class TouchUI(tk.Tk):
             from gantry.roll_feed_cam import RollFeedGantry, build_roll_feed_ops
 
             gantry = RollFeedGantry(
-                feed_window_y=float(self.slats_cam_feed_window_mm.get() or "200.0"),
-                gantry_width_x=float(self.slats_cam_cardboard_width_mm.get() or "300.0"),
+                feed_window_y=float(self.slats_cam_feed_window_mm.get() or "120.0"),
+                gantry_width_x=float(self.slats_cam_cardboard_width_mm.get() or "280.0"),
                 feed_clearance_y=20.0,
             )
 
@@ -4515,6 +4882,8 @@ class TouchUI(tk.Tk):
         """
         Parse status lines like:
         <Idle|MPos:0.000,0.000,0.000|WPos:0.000,0.000,0.000|Pn:XZ>
+        or:
+        <Idle|MPos:...|WCO:...|Pn:...>
         """
         if not line.startswith("<") or not line.endswith(">"):
             return
@@ -4534,6 +4903,9 @@ class TouchUI(tk.Tk):
             self.in_alarm = False
 
         saw_pn = False
+        mpos_coords = None
+        wpos_coords = None
+        wco_coords = None
 
         for part in parts[1:]:
             if ":" not in part:
@@ -4545,6 +4917,7 @@ class TouchUI(tk.Tk):
 
             if key == "MPos":
                 coords = [c.strip() for c in val.split(",")]
+                mpos_coords = coords
                 self.machine_pos_text.set(f"MPos: {val}")
 
                 if len(coords) > 0:
@@ -4559,11 +4932,12 @@ class TouchUI(tk.Tk):
                     self.machine_pos_b_text.set(coords[4])
                 if len(coords) > 5:
                     self.machine_pos_c_text.set(coords[5])
-                
+
                 self._update_preview_from_machine_pos()
 
             elif key == "WPos":
                 coords = [c.strip() for c in val.split(",")]
+                wpos_coords = coords
                 self.work_pos_text.set(f"WPos: {val}")
 
                 if len(coords) > 0:
@@ -4579,12 +4953,15 @@ class TouchUI(tk.Tk):
                 if len(coords) > 5:
                     self.work_pos_c_text.set(coords[5])
 
+            elif key == "WCO":
+                wco_coords = [c.strip() for c in val.split(",")]
+
             elif key == "Pn":
                 saw_pn = True
                 active = set(val.upper())
 
                 labels = []
-                for axis in ["X", "Y", "Z", "B", "C"]:
+                for axis in ["X", "Y", "Z", "A", "B"]:
                     if axis in active:
                         labels.append(f"[{axis}]")
                     else:
@@ -4599,6 +4976,29 @@ class TouchUI(tk.Tk):
                         else:
                             lbl.config(bg="#444444", fg="#FFFFFF")
 
+        # If firmware reports MPos + WCO but not WPos, compute WPos ourselves
+        if wpos_coords is None and mpos_coords is not None and wco_coords is not None:
+            try:
+                n = min(len(mpos_coords), len(wco_coords), 6)
+                computed = [f"{float(mpos_coords[i]) - float(wco_coords[i]):.2f}" for i in range(n)]
+                joined = ",".join(computed)
+                self.work_pos_text.set(f"WPos: {joined}")
+
+                if len(computed) > 0:
+                    self.work_pos_x_text.set(computed[0])
+                if len(computed) > 1:
+                    self.work_pos_y_text.set(computed[1])
+                if len(computed) > 2:
+                    self.work_pos_z_text.set(computed[2])
+                if len(computed) > 3:
+                    self.work_pos_a_text.set(computed[3])
+                if len(computed) > 4:
+                    self.work_pos_b_text.set(computed[4])
+                if len(computed) > 5:
+                    self.work_pos_c_text.set(computed[5])
+            except Exception:
+                pass
+
         if not saw_pn:
             self.limit_switch_text.set("Limits: --")
             if hasattr(self, "limit_labels"):
@@ -4610,16 +5010,16 @@ class TouchUI(tk.Tk):
     # =========================
     def _process_rx(self) -> None:
         try:
-            for line in self.ctrl.get_rx_lines():
+            for line in self.ctrl.get_status_lines():
                 self.last_status_text.set(f"Last status: {line}")
-                self._append_console(f"<< {line}")
 
                 if hasattr(self, "machine_status_var"):
                     self.machine_status_var.set(line)
 
                 if line.startswith("<") and line.endswith(">"):
                     self._parse_status(line)
-
+                else:
+                    self._append_console(f"<< {line}")
         finally:
             self.after(self.RX_PROCESS_MS, self._process_rx)
 

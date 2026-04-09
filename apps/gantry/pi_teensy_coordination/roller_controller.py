@@ -10,7 +10,6 @@ from .config import (
     DEFAULT_ROLLER_SPEED_MM_S,
 )
 
-
 class BaseRollerDriver:
     def feed_distance(self, distance_mm, speed_mm_s=DEFAULT_ROLLER_SPEED_MM_S, forward=True):
         raise NotImplementedError
@@ -70,6 +69,7 @@ class SimulatedRollerDriver(BaseRollerDriver):
 
 class LGPIOStepperDriver(BaseRollerDriver):
     def __init__(self, step_pin, dir_pin, enable_pin, steps_per_mm):
+
         import lgpio
 
         self.lgpio = lgpio

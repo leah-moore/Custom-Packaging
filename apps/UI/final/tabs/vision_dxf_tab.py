@@ -25,12 +25,33 @@ def build_vision_dxf_tab(app, parent) -> None:
     main = tk.Frame(parent, bg=BG)
     main.pack(fill="both", expand=True, padx=4, pady=4)
 
+    if not hasattr(app, "vision_status_var"):
+        app.vision_status_var = tk.StringVar(value="Idle")
+    if not hasattr(app, "vision_process_var"):
+        app.vision_process_var = tk.StringVar(value="No scan yet")
+    if not hasattr(app, "vision_result_var"):
+        app.vision_result_var = tk.StringVar(value="No run yet")
+    if not hasattr(app, "stitched_info_var"):
+        app.stitched_info_var = tk.StringVar(value="No stitched image")
+    if not hasattr(app, "generated_dxf_var"):
+        app.generated_dxf_var = tk.StringVar(value="No generated DXF")
+    if not hasattr(app, "camera_info_var"):
+        app.camera_info_var = tk.StringVar(value="Camera idle")
+    if not hasattr(app, "dxf_info_text"):
+        app.dxf_info_text = tk.StringVar(value="No DXF loaded")
+    if not hasattr(app, "vision_dxf_status_var"):
+        app.vision_dxf_status_var = tk.StringVar(value="Idle")
+    if not hasattr(app, "vision_dxf_view_mode"):
+        app.vision_dxf_view_mode = tk.StringVar(value="split")
+    if not hasattr(app, "_vision_dxf_view_buttons"):
+        app._vision_dxf_view_buttons = {}
+
     # =====================================================
-    # TOP CONTROLS
+    # SINGLE TOP PANEL: BUTTONS + STATUS
     # =====================================================
     top = tk.LabelFrame(
         main,
-        text="Vision + DXF Controls",
+        text="Vision Controls",
         bg=PANEL_BG,
         fg=FG,
         font=title_font,
@@ -41,39 +62,61 @@ def build_vision_dxf_tab(app, parent) -> None:
     )
     top.pack(fill="x", pady=(0, 6))
 
-    btn_row = tk.Frame(top, bg=PANEL_BG)
-    btn_row.pack(fill="x")
+    row = tk.Frame(top, bg=PANEL_BG)
+    row.pack(fill="x")
 
+    # CAMERA FIRST
     tk.Button(
-        btn_row,
+        row,
         text="Start Camera",
         command=app._start_live_camera,
         bg=BTN_GREEN,
         fg=BTN_GREEN_FG,
-        activebackground=BTN_PRESSED,
-        activeforeground="#000000",
         font=default_font,
-        width=12,
+        width=11,
         bd=3,
         relief="raised",
     ).pack(side="left", padx=(0, 4), pady=2)
 
     tk.Button(
-        btn_row,
+        row,
         text="Stop Camera",
         command=app._stop_live_camera,
         bg=BTN_RED,
         fg=BTN_RED_FG,
-        activebackground=BTN_PRESSED,
-        activeforeground="#000000",
         font=default_font,
-        width=12,
+        width=10,
+        bd=3,
+        relief="raised",
+    ).pack(side="left", padx=4, pady=2)
+
+    # THEN SCAN
+    tk.Button(
+        row,
+        text="Start Scan",
+        command=app._start_vision_scan,
+        bg=BTN_BLUE,
+        fg=BTN_BLUE_FG,
+        font=default_font,
+        width=10,
         bd=3,
         relief="raised",
     ).pack(side="left", padx=4, pady=2)
 
     tk.Button(
-        btn_row,
+        row,
+        text="Stop Scan",
+        command=app._stop_vision_scan,
+        bg=BTN_RED,
+        fg=BTN_RED_FG,
+        font=default_font,
+        width=10,
+        bd=3,
+        relief="raised",
+    ).pack(side="left", padx=4, pady=2)
+
+    tk.Button(
+        row,
         text="Load DXF",
         command=app._load_dxf_file,
         bg=BTN_NEUTRAL,
@@ -81,60 +124,22 @@ def build_vision_dxf_tab(app, parent) -> None:
         activebackground=BTN_PRESSED,
         activeforeground="#000000",
         font=default_font,
-        width=12,
+        width=9,
         bd=3,
         relief="raised",
     ).pack(side="left", padx=4, pady=2)
 
-    tk.Button(
-        btn_row,
-        text="Run DXF Vision",
-        command=app._run_dxf_vision_pipeline,
-        bg=BTN_BLUE,
-        fg=BTN_BLUE_FG,
-        activebackground=BTN_PRESSED,
-        activeforeground="#000000",
-        font=default_font,
-        width=14,
-        bd=3,
-        relief="raised",
-    ).pack(side="left", padx=4, pady=2)
+    tk.Frame(row, bg=PANEL_BG).pack(side="left", fill="x", expand=True)
 
-    app.vision_dxf_status_var = tk.StringVar(value="Idle")
     tk.Label(
-        btn_row,
-        textvariable=app.vision_dxf_status_var,
-        bg=PANEL_BG,
-        fg="#CCCCCC",
-        font=status_font,
-        anchor="e",
-    ).pack(side="right", padx=8)
-
-    # =====================================================
-    # VIEW MODE + DXF TOOLS
-    # =====================================================
-    tools = tk.LabelFrame(
-        main,
-        text="DXF View Tools",
+        row,
+        text="View:",
         bg=PANEL_BG,
         fg=FG,
-        font=title_font,
-        padx=4,
-        pady=4,
-        bd=2,
-        relief="solid",
-    )
-    tools.pack(fill="x", pady=(0, 6))
+        font=small_font,
+    ).pack(side="left", padx=(6, 4))
 
-    tools_row = tk.Frame(tools, bg=PANEL_BG)
-    tools_row.pack(fill="x")
-
-    if not hasattr(app, "vision_dxf_view_mode"):
-        app.vision_dxf_view_mode = tk.StringVar(value="split")
-
-    app._vision_dxf_view_buttons = {}
-
-    def refresh_view_mode_buttons() -> None:
+    def refresh_view_mode_buttons():
         current = app.vision_dxf_view_mode.get()
         for mode, btn in app._vision_dxf_view_buttons.items():
             if mode == current:
@@ -142,46 +147,36 @@ def build_vision_dxf_tab(app, parent) -> None:
             else:
                 btn.config(bg=BTN_NEUTRAL, fg=BTN_NEUTRAL_FG)
 
-    def refresh_layout() -> None:
+    def refresh_layout():
         for child in app.vision_dxf_content.winfo_children():
             child.pack_forget()
 
         mode = app.vision_dxf_view_mode.get()
 
         if mode == "camera":
-            app.vision_camera_panel.pack(fill="both", expand=True)
+            app.camera_view_panel.pack(fill="both", expand=True)
         elif mode == "dxf":
-            app.vision_dxf_panel.pack(fill="both", expand=True)
+            app.dxf_stitch_panel.pack(fill="both", expand=True)
         else:
-            app.vision_camera_panel.pack(side="left", fill="both", expand=True, padx=(0, 6))
-            app.vision_dxf_panel.pack(side="left", fill="both", expand=True, padx=(6, 0))
+            app.camera_view_panel.pack(side="left", fill="both", expand=True, padx=(0, 6))
+            app.dxf_stitch_panel.pack(side="left", fill="both", expand=True, padx=(6, 0))
 
-    def set_view_mode(mode: str) -> None:
+    def set_view_mode(mode: str):
         app.vision_dxf_view_mode.set(mode)
         refresh_view_mode_buttons()
         refresh_layout()
-
         app.update_idletasks()
 
-        if hasattr(app, "camera_preview_canvas"):
-            app.camera_preview_canvas.update_idletasks()
+        if getattr(app, "dxf_preview_canvas", None) is not None:
+            app.after(10, app._draw_dxf_preview)
+        if getattr(app, "_stitched_image", None) is not None and hasattr(app, "_update_stitched_canvas"):
+            app.after(10, app._update_stitched_canvas)
+        if getattr(app, "_camera_frame", None) is not None and hasattr(app, "_update_camera_canvas"):
+            app.after(10, app._update_camera_canvas)
 
-        if hasattr(app, "dxf_preview_canvas"):
-            app.dxf_preview_canvas.update_idletasks()
-
-        app.after(10, lambda: hasattr(app, "_draw_dxf_preview") and app._draw_dxf_preview())
-
-    tk.Label(
-        tools_row,
-        text="View:",
-        bg=PANEL_BG,
-        fg=FG,
-        font=small_font,
-    ).pack(side="left", padx=(0, 6))
-
-    def make_mode_button(text: str, mode: str):
+    def make_mode_button(text: str, mode: str, width: int):
         btn = tk.Button(
-            tools_row,
+            row,
             text=text,
             command=lambda m=mode: set_view_mode(m),
             bg=BTN_NEUTRAL,
@@ -189,7 +184,7 @@ def build_vision_dxf_tab(app, parent) -> None:
             activebackground=BTN_PRESSED,
             activeforeground="#000000",
             font=small_font,
-            width=11,
+            width=width,
             bd=2,
             relief="raised",
             pady=1,
@@ -197,130 +192,70 @@ def build_vision_dxf_tab(app, parent) -> None:
         btn.pack(side="left", padx=(0, 4), pady=2)
         app._vision_dxf_view_buttons[mode] = btn
 
-    make_mode_button("Split", "split")
-    make_mode_button("Camera Only", "camera")
-    make_mode_button("DXF Only", "dxf")
-
-
-    tk.Frame(tools_row, bg=PANEL_BG, width=18).pack(side="left")
-
-    tk.Button(
-        tools_row,
-        text="Zoom -",
-        command=lambda: app._zoom_dxf(0.8),
-        bg=BTN_NEUTRAL,
-        fg=BTN_NEUTRAL_FG,
-        activebackground=BTN_PRESSED,
-        activeforeground="#000000",
-        font=default_font,
-        width=10,
-        bd=2,
-        relief="raised",
-    ).pack(side="right", padx=4, pady=2)
-
-    tk.Button(
-        tools_row,
-        text="Zoom +",
-        command=lambda: app._zoom_dxf(1.25),
-        bg=BTN_NEUTRAL,
-        fg=BTN_NEUTRAL_FG,
-        activebackground=BTN_PRESSED,
-        activeforeground="#000000",
-        font=default_font,
-        width=10,
-        bd=2,
-        relief="raised",
-    ).pack(side="right", padx=4, pady=2)
-
-    tk.Button(
-        tools_row,
-        text="Fit",
-        command=app._dxf_fit_view,
-        bg=BTN_BLUE,
-        fg=BTN_BLUE_FG,
-        activebackground=BTN_PRESSED,
-        activeforeground="#000000",
-        font=default_font,
-        width=10,
-        bd=2,
-        relief="raised",
-    ).pack(side="right", padx=(12, 4), pady=2)
-
-    tk.Button(
-        tools_row,
-        text="Reset",
-        command=app._reset_dxf_view,
-        bg=BTN_NEUTRAL,
-        fg=BTN_NEUTRAL_FG,
-        activebackground=BTN_PRESSED,
-        activeforeground="#000000",
-        font=default_font,
-        width=10,
-        bd=2,
-        relief="raised",
-    ).pack(side="right", padx=4, pady=2)
-
+    make_mode_button("Split", "split", 8)
+    make_mode_button("Camera", "camera", 8)
+    make_mode_button("DXF/Stitch", "dxf", 10)
 
     tk.Label(
-        tools_row,
-        text="DXF Controls:",
+        row,
+        textvariable=app.vision_status_var,
         bg=PANEL_BG,
-        fg=FG,
-        font=small_font,
-    ).pack(side="right", padx=(0, 6))
-
+        fg="#CCCCCC",
+        font=status_font,
+        anchor="e",
+        width=12,
+    ).pack(side="right", padx=(8, 0))
 
     # =====================================================
-    # MAIN VIEW AREA
+    # CONTENT AREA
     # =====================================================
     app.vision_dxf_content = tk.Frame(main, bg=BG)
     app.vision_dxf_content.pack(fill="both", expand=True)
 
-    # LEFT: LIVE CAMERA
-    app.vision_camera_panel = tk.LabelFrame(
-        app.vision_dxf_content,
-        text="Live Camera View",
-        bg=PANEL_BG,
-        fg=FG,
-        font=title_font,
-        padx=4,
-        pady=4,
-        bd=2,
-        relief="solid",
-    )
+    def make_panel(parent_, title):
+        return tk.LabelFrame(
+            parent_,
+            text=title,
+            bg=PANEL_BG,
+            fg=FG,
+            font=title_font,
+            padx=4,
+            pady=4,
+            bd=2,
+            relief="solid",
+        )
 
-    app.camera_preview_canvas = tk.Canvas(
-        app.vision_camera_panel,
+    # LEFT SIDE: STITCHED + DXF
+    app.dxf_stitch_panel = tk.Frame(app.vision_dxf_content, bg=BG)
+    app.dxf_stitch_panel.grid_columnconfigure(0, weight=1)
+    app.dxf_stitch_panel.grid_columnconfigure(1, weight=1)
+    app.dxf_stitch_panel.grid_rowconfigure(0, weight=1)
+
+    stitched_panel = make_panel(app.dxf_stitch_panel, "Stitched Image")
+    stitched_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 3))
+
+    app.stitched_preview_canvas = tk.Canvas(
+        stitched_panel,
         bg="#111111",
         highlightthickness=0,
     )
-    app.camera_preview_canvas.pack(fill="both", expand=True, padx=2, pady=2)
+    app.stitched_preview_canvas.pack(fill="both", expand=True, padx=2, pady=2)
 
-    app.camera_info_var = tk.StringVar(value="Camera idle")
     tk.Label(
-        app.vision_camera_panel,
-        textvariable=app.camera_info_var,
+        stitched_panel,
+        textvariable=app.stitched_info_var,
         bg=PANEL_BG,
         fg="#CCCCCC",
         font=default_font,
         anchor="w",
+        justify="left",
     ).pack(fill="x", pady=(4, 0))
 
-    # RIGHT: DXF PREVIEW
-    app.vision_dxf_panel = tk.LabelFrame(
-        app.vision_dxf_content,
-        text="DXF Preview",
-        bg=PANEL_BG,
-        fg=FG,
-        font=title_font,
-        padx=4,
-        pady=4,
-        bd=2,
-        relief="solid",
-    )
+    dxf_panel = make_panel(app.dxf_stitch_panel, "DXF")
+    dxf_panel.grid(row=0, column=1, sticky="nsew", padx=(3, 0))
 
     app.dxf_preview_canvas = tk.Canvas(
-        app.vision_dxf_panel,
+        dxf_panel,
         bg="#111111",
         highlightthickness=0,
     )
@@ -334,9 +269,8 @@ def build_vision_dxf_tab(app, parent) -> None:
     app.dxf_preview_canvas.bind("<B1-Motion>", app._on_dxf_pan_move)
     app.dxf_preview_canvas.bind("<ButtonRelease-1>", app._on_dxf_pan_end)
 
-    app.dxf_info_text = tk.StringVar(value="No DXF loaded")
     tk.Label(
-        app.vision_dxf_panel,
+        dxf_panel,
         textvariable=app.dxf_info_text,
         bg=PANEL_BG,
         fg="#CCCCCC",
@@ -345,32 +279,94 @@ def build_vision_dxf_tab(app, parent) -> None:
         justify="left",
     ).pack(fill="x", pady=(4, 0))
 
-    refresh_view_mode_buttons()
-    refresh_layout()
+    # RIGHT SIDE: CAMERA + STATUS
+    app.camera_view_panel = tk.Frame(app.vision_dxf_content, bg=BG)
+    app.camera_view_panel.grid_columnconfigure(0, weight=3)
+    app.camera_view_panel.grid_columnconfigure(1, weight=2)
+    app.camera_view_panel.grid_rowconfigure(0, weight=1)
 
-    # =====================================================
-    # BOTTOM STATUS / RESULTS
-    # =====================================================
-    bottom = tk.LabelFrame(
-        main,
-        text="Vision Run Status",
-        bg=PANEL_BG,
-        fg=FG,
-        font=title_font,
-        padx=4,
-        pady=4,
-        bd=2,
-        relief="solid",
+    camera_panel = make_panel(app.camera_view_panel, "Camera View")
+    camera_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 3))
+
+    app.camera_preview_canvas = tk.Canvas(
+        camera_panel,
+        bg="#111111",
+        highlightthickness=0,
     )
-    bottom.pack(fill="x", pady=(6, 0))
+    app.camera_preview_canvas.pack(fill="both", expand=True, padx=2, pady=2)
 
-    app.vision_result_var = tk.StringVar(value="No run yet")
     tk.Label(
-        bottom,
-        textvariable=app.vision_result_var,
+        camera_panel,
+        textvariable=app.camera_info_var,
         bg=PANEL_BG,
-        fg=FG,
+        fg="#CCCCCC",
         font=default_font,
         anchor="w",
         justify="left",
-    ).pack(fill="x")
+    ).pack(fill="x", pady=(4, 0))
+
+    process_panel = make_panel(app.camera_view_panel, "Process Status")
+    process_panel.grid(row=0, column=1, sticky="nsew", padx=(3, 0))
+
+    tk.Label(
+        process_panel,
+        text="Pipeline Status",
+        bg=PANEL_BG,
+        fg=FG,
+        font=("Arial", 9, "bold"),
+        anchor="w",
+    ).pack(fill="x", pady=(0, 4))
+
+    tk.Label(
+        process_panel,
+        textvariable=app.vision_process_var,
+        bg=PANEL_BG,
+        fg="#CCCCCC",
+        font=small_font,
+        anchor="nw",
+        justify="left",
+        wraplength=180,
+    ).pack(fill="x", pady=(0, 8))
+
+    tk.Label(
+        process_panel,
+        text="Generated DXF",
+        bg=PANEL_BG,
+        fg=FG,
+        font=("Arial", 9, "bold"),
+        anchor="w",
+    ).pack(fill="x", pady=(0, 4))
+
+    tk.Label(
+        process_panel,
+        textvariable=app.generated_dxf_var,
+        bg=PANEL_BG,
+        fg="#CCCCCC",
+        font=small_font,
+        anchor="nw",
+        justify="left",
+        wraplength=180,
+    ).pack(fill="x", pady=(0, 8))
+
+    tk.Label(
+        process_panel,
+        text="Run Result",
+        bg=PANEL_BG,
+        fg=FG,
+        font=("Arial", 9, "bold"),
+        anchor="w",
+    ).pack(fill="x", pady=(0, 4))
+
+    tk.Label(
+        process_panel,
+        textvariable=app.vision_result_var,
+        bg=PANEL_BG,
+        fg="#CCCCCC",
+        font=small_font,
+        anchor="nw",
+        justify="left",
+        wraplength=180,
+    ).pack(fill="x", pady=(0, 8))
+
+    refresh_view_mode_buttons()
+    refresh_layout()

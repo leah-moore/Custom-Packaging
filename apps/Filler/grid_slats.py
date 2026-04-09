@@ -103,7 +103,7 @@ FORCE_SOLID = False
 RM_HOLES    = False
 
 # envelope silhouette sampling density (higher = smoother, slower)
-ENVELOPE_SAMPLES = 1200
+ENVELOPE_SAMPLES = 1600
 
 # plotting
 MESH_ALPHA  = 0.18
@@ -117,20 +117,20 @@ CUT_BOTH_SIDES = True   # or False
 # SMOOTHING & FEATURE SIZE CONTROLS
 # ================================================
 # Blade detail tolerance: removes micro-features smaller than this
-MIN_FEATURE_SIZE = 1.5         # mm — collapse blade steps/notches smaller than this
+MIN_FEATURE_SIZE = 2.5         # mm — collapse blade steps/notches smaller than this
 #                                # Increase to remove tiny details (1.5-3.0 mm typical)
 #                                # Decrease to keep fine geometry (0.5-1.0 mm)
 
 # Simplify contour curves: removes vertices that don't deviate much from a line
-SIMPLIFY_TOLERANCE = 0.5       # Douglas-Peucker tolerance (mm)
+SIMPLIFY_TOLERANCE = 0.8       # Douglas-Peucker tolerance (mm)
 #                                # 0.1-0.3 = smooth curves, keeps detail
 #                                # 0.5-0.75 = aggressive smoothing, removes micro-zigzags
 #                                # 1.0+ = very simplified, blocky look
 
 # Morphological smoothing: dilate→erode to round sharp corners
 USE_MORPH_SMOOTH = True        # if True, apply dilate→erode smoothing
-MORPH_EXPAND = 0.5             # expand amount (mm) — increase for rounder curves
-MORPH_SHRINK = 0.5             # shrink amount (mm) — keep equal to MORPH_EXPAND
+MORPH_EXPAND = 0.8             # expand amount (mm) — increase for rounder curves
+MORPH_SHRINK = 0.8             # shrink amount (mm) — keep equal to MORPH_EXPAND
 # ================================================
 
 @dataclass

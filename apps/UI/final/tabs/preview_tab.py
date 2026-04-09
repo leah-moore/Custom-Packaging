@@ -34,7 +34,6 @@ def build_preview_tab(app, parent) -> None:
     # =========================================================
     app.preview_mode = tk.StringVar(value="2d")
     app.preview_speed_var = tk.StringVar(value="1.0x")
-    app.preview_live_follow_var = tk.BooleanVar(value=True)
 
     if not hasattr(app, "preview_time_var") or app.preview_time_var is None:
         app.preview_time_var = tk.StringVar(value="Time: --:--")
@@ -75,44 +74,6 @@ def build_preview_tab(app, parent) -> None:
         fn = getattr(app, name, None)
         if callable(fn):
             fn()
-
-    def _set_view_top() -> None:
-        if getattr(app, "preview_3d_ax", None) is None:
-            return
-        try:
-            app.preview_3d_ax.view_init(elev=90, azim=-90)
-            app.preview_3d_canvas.draw_idle()
-        except Exception:
-            pass
-
-    def _set_view_front() -> None:
-        if getattr(app, "preview_3d_ax", None) is None:
-            return
-        try:
-            app.preview_3d_ax.view_init(elev=0, azim=-90)
-            app.preview_3d_canvas.draw_idle()
-        except Exception:
-            pass
-
-    def _set_view_iso() -> None:
-        if getattr(app, "preview_3d_ax", None) is None:
-            return
-        try:
-            app.preview_3d_ax.view_init(elev=20, azim=-90)
-            app.preview_3d_canvas.draw_idle()
-        except Exception:
-            pass
-
-    def _toggle_live_follow() -> None:
-        current = bool(app.preview_live_follow_var.get())
-        app.preview_live_follow_var.set(not current)
-        _refresh_follow_button()
-
-    def _refresh_follow_button() -> None:
-        if bool(app.preview_live_follow_var.get()):
-            btn_follow.config(bg=BTN_GREEN, fg=BTN_GREEN_FG, relief="sunken", text="FOLLOW ON")
-        else:
-            btn_follow.config(bg="#2E2E2E", fg=FG, relief="raised", text="FOLLOW OFF")
 
     # =========================================================
     # TOP BAR
@@ -281,94 +242,14 @@ def build_preview_tab(app, parent) -> None:
     ).pack(anchor="e", pady=(6, 0))
 
     # =========================================================
-    # SECOND TOOLBAR
+    # SECOND TOOLBAR: SPEED ONLY
     # =========================================================
     controls2 = tk.Frame(main, bg="#171717", height=60)
     controls2.pack(fill="x", padx=0, pady=0)
     controls2.pack_propagate(False)
 
-    # View presets
-    view_frame = tk.Frame(controls2, bg="#171717")
-    view_frame.pack(side="left", padx=12, pady=10)
-
-    tk.Label(
-        view_frame,
-        text="CAMERA",
-        bg="#171717",
-        fg="#BFBFBF",
-        font=title_font,
-    ).pack(anchor="w", pady=(0, 6))
-
-    view_btn_row = tk.Frame(view_frame, bg="#171717")
-    view_btn_row.pack(anchor="w")
-
-    btn_top = tk.Button(
-        view_btn_row,
-        text="TOP",
-        command=_set_view_top,
-        bg="#2E2E2E",
-        fg=FG,
-        activebackground=BTN_PRESSED,
-        activeforeground="#000000",
-        font=mode_font,
-        width=7,
-        height=1,
-        bd=2,
-        relief="raised",
-    )
-    btn_top.pack(side="left", padx=(0, 6))
-
-    btn_front = tk.Button(
-        view_btn_row,
-        text="FRONT",
-        command=_set_view_front,
-        bg="#2E2E2E",
-        fg=FG,
-        activebackground=BTN_PRESSED,
-        activeforeground="#000000",
-        font=mode_font,
-        width=7,
-        height=1,
-        bd=2,
-        relief="raised",
-    )
-    btn_front.pack(side="left", padx=6)
-
-    btn_iso = tk.Button(
-        view_btn_row,
-        text="ISO",
-        command=_set_view_iso,
-        bg="#2E2E2E",
-        fg=FG,
-        activebackground=BTN_PRESSED,
-        activeforeground="#000000",
-        font=mode_font,
-        width=7,
-        height=1,
-        bd=2,
-        relief="raised",
-    )
-    btn_iso.pack(side="left", padx=6)
-
-    btn_follow = tk.Button(
-        view_btn_row,
-        text="FOLLOW ON",
-        command=_toggle_live_follow,
-        bg=BTN_GREEN,
-        fg=BTN_GREEN_FG,
-        activebackground=BTN_PRESSED,
-        activeforeground="#000000",
-        font=mode_font,
-        width=8,
-        height=1,
-        bd=2,
-        relief="sunken",
-    )
-    btn_follow.pack(side="left", padx=(6, 0))
-
-    # Speed presets
     speed_frame = tk.Frame(controls2, bg="#171717")
-    speed_frame.pack(side="left", padx=24, pady=10)
+    speed_frame.pack(side="left", padx=12, pady=10)
 
     tk.Label(
         speed_frame,
@@ -484,7 +365,5 @@ def build_preview_tab(app, parent) -> None:
     )
     app.preview_scrubber.pack(fill="x", expand=True)
 
-    # init visuals
     _set_speed("1.0x")
-    _refresh_follow_button()
     _set_mode("2d")

@@ -13,7 +13,7 @@ This is GEOMETRY ONLY:
 from __future__ import annotations
 from typing import List, Dict, Tuple
 from shapely.geometry import Polygon, MultiPolygon
-from extract_toolpaths import chain_segments,add_leads
+from apps.gcode.extract_toolpaths import chain_segments,add_leads
 Point = Tuple[float, float]
 
 

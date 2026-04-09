@@ -40,6 +40,9 @@ def build_manual_setup_tab(app, parent) -> None:
     right = tk.Frame(content, bg=BG)
     right.pack(side="left", fill="both", expand=True)
 
+    app.machine_buttons = []
+    app.output_buttons = []
+
     # =====================================================
     # LEFT: JOG SETTINGS
     # =====================================================
@@ -58,15 +61,6 @@ def build_manual_setup_tab(app, parent) -> None:
     settings_box.pack(fill="x", pady=(0, 4))
 
     settings_box.grid_rowconfigure(999, weight=1)
-
-    def make_radio_row(parent_box, row_idx, label_text, variable, values):
-        tk.Label(
-            parent_box,
-            text=label_text,
-            bg=PANEL_BG,
-            fg=FG,
-            font=default_font,
-        ).grid(row=row_idx, column=0, sticky="w", pady=(4, 1))
 
     def make_radio_row(parent_box, row_idx, label_text, variable, values):
         tk.Label(
@@ -119,7 +113,7 @@ def build_manual_setup_tab(app, parent) -> None:
         fg=FG,
         font=panel_font,
         padx=5,
-        pady=9,
+        pady=8,
         bd=2,
         relief="solid",
     )
@@ -141,7 +135,7 @@ def build_manual_setup_tab(app, parent) -> None:
         row = idx // 2
         col = idx % 2
 
-        tk.Button(
+        btn = tk.Button(
             btn_frame,
             text=label,
             command=fn,
@@ -153,7 +147,9 @@ def build_manual_setup_tab(app, parent) -> None:
             bd=1,
             relief="raised",
             pady=2,
-        ).grid(row=row, column=col, sticky="ew", padx=3, pady=2)
+        )
+        btn.grid(row=row, column=col, sticky="ew", padx=3, pady=2)
+        app.machine_buttons.append(btn)
 
     btn_frame.grid_columnconfigure(0, weight=1)
     btn_frame.grid_columnconfigure(1, weight=1)
@@ -282,14 +278,9 @@ def build_manual_setup_tab(app, parent) -> None:
     def update_jog_mode(mode):
         # STOP any motion when switching modes
         if hasattr(app, "_cancel_jog"):
-            app._cancel_jog()
+            app._cancel_jog(send_hold=False)
         if hasattr(app, "_stop_roller_jog"):
             app._stop_roller_jog()
-        if app.ctrl.is_connected:
-            try:
-                app.ctrl.send_realtime(b"\x85")
-            except Exception:
-                pass
 
         app.jog_mode_var.set(mode)
 
@@ -429,7 +420,7 @@ def build_manual_setup_tab(app, parent) -> None:
     outputs_box.grid_columnconfigure(0, weight=1)
     outputs_box.grid_columnconfigure(1, weight=1)
 
-    tk.Button(
+    btn = tk.Button(
         outputs_box,
         text="Light ON",
         command=app._light_on,
@@ -441,9 +432,11 @@ def build_manual_setup_tab(app, parent) -> None:
         bd=1,
         relief="raised",
         pady=1,
-    ).grid(row=0, column=0, padx=3, pady=(2, 1), sticky="ew")
+    )
+    btn.grid(row=0, column=0, padx=3, pady=(2, 1), sticky="ew")
+    app.output_buttons.append(btn)
 
-    tk.Button(
+    btn = tk.Button(
         outputs_box,
         text="Light OFF",
         command=app._light_off,
@@ -455,7 +448,9 @@ def build_manual_setup_tab(app, parent) -> None:
         bd=1,
         relief="raised",
         pady=1,
-    ).grid(row=0, column=1, padx=3, pady=(2, 1), sticky="ew")
+    )
+    btn.grid(row=0, column=1, padx=3, pady=(2, 1), sticky="ew")
+    app.output_buttons.append(btn)
 
     outputs_box.grid_rowconfigure(1, minsize=4)
 
@@ -488,7 +483,7 @@ def build_manual_setup_tab(app, parent) -> None:
             bd=0,
         ).pack(side="left", padx=2)
 
-    tk.Button(
+    btn = tk.Button(
         outputs_box,
         text="Spindle ON",
         command=app._spindle_on,
@@ -500,9 +495,11 @@ def build_manual_setup_tab(app, parent) -> None:
         bd=1,
         relief="raised",
         pady=1,
-    ).grid(row=4, column=0, padx=3, pady=(2, 3), sticky="ew")
+    )
+    btn.grid(row=4, column=0, padx=3, pady=(2, 3), sticky="ew")
+    app.output_buttons.append(btn)
 
-    tk.Button(
+    btn = tk.Button(
         outputs_box,
         text="Spindle OFF",
         command=app._spindle_off,
@@ -514,7 +511,9 @@ def build_manual_setup_tab(app, parent) -> None:
         bd=1,
         relief="raised",
         pady=1,
-    ).grid(row=4, column=1, padx=3, pady=(2, 3), sticky="ew")
+    )
+    btn.grid(row=4, column=1, padx=3, pady=(2, 3), sticky="ew")
+    app.output_buttons.append(btn)
 
     tk.Label(
         outputs_box,
@@ -541,8 +540,14 @@ def build_manual_setup_tab(app, parent) -> None:
     top_row = tk.Frame(pos_zero_box, bg=PANEL_BG)
     top_row.pack(fill="x", pady=(2, 4))
 
+    top_row.grid_columnconfigure(0, weight=1)
+    top_row.grid_columnconfigure(1, weight=0)
+
     left_col = tk.Frame(top_row, bg=PANEL_BG)
-    left_col.pack(side="left", fill="both", expand=True, padx=(0, 8), anchor="nw")
+    left_col.grid(row=0, column=0, sticky="ew", padx=(0, 4))
+
+    right_col = tk.Frame(top_row, bg=PANEL_BG)
+    right_col.grid(row=0, column=1, sticky="ne", padx=(4, 0))
 
     tk.Label(
         left_col,
@@ -552,10 +557,7 @@ def build_manual_setup_tab(app, parent) -> None:
         font=panel_font,
     ).pack(anchor="w", pady=(0, 2))
 
-    dro_and_info = tk.Frame(left_col, bg=PANEL_BG)
-    dro_and_info.pack(anchor="w")
-
-    dro_frame = tk.Frame(dro_and_info, bg=PANEL_BG)
+    dro_frame = tk.Frame(left_col, bg=PANEL_BG)
     dro_frame.pack(fill="x", expand=True)
 
     dro_axes = [
@@ -567,10 +569,9 @@ def build_manual_setup_tab(app, parent) -> None:
     ]
 
     for idx, (axis_name, w_var, m_var) in enumerate(dro_axes):
-        cell = tk.Frame(dro_frame, bg="#171717", padx=14, pady=6)
-        cell.grid(row=0, column=idx, sticky="nsew", padx=4, pady=2)
+        cell = tk.Frame(dro_frame, bg="#171717", padx=8, pady=6)
+        cell.grid(row=0, column=idx, sticky="nsew", padx=2, pady=2)
 
-        # Axis label
         tk.Label(
             cell,
             text=axis_name,
@@ -580,7 +581,6 @@ def build_manual_setup_tab(app, parent) -> None:
             anchor="w",
         ).pack(anchor="w")
 
-        # Work position (main)
         tk.Label(
             cell,
             textvariable=w_var,
@@ -591,7 +591,6 @@ def build_manual_setup_tab(app, parent) -> None:
             anchor="e",
         ).pack(anchor="w")
 
-        # Machine position (secondary)
         tk.Label(
             cell,
             textvariable=m_var,
@@ -602,13 +601,10 @@ def build_manual_setup_tab(app, parent) -> None:
             anchor="e",
         ).pack(anchor="w")
 
-    
     for c in range(5):
         dro_frame.grid_columnconfigure(c, weight=1)
 
     # ---- zero buttons on right ----
-    right_col = tk.Frame(top_row, bg=PANEL_BG)
-    right_col.pack(side="left", fill="y", expand=False, padx=(12, 0), anchor="ne")
     
     tk.Label(
         right_col,
@@ -660,7 +656,7 @@ def build_manual_setup_tab(app, parent) -> None:
         bd=1,
         relief="raised",
         pady=1,
-        width=10,
+        width=12,
     ).grid(row=0, column=0, padx=8, pady=5, sticky="ew")
 
     tk.Button(
@@ -675,7 +671,7 @@ def build_manual_setup_tab(app, parent) -> None:
         bd=1,
         relief="raised",
         pady=1,
-        width=10,
+        width=14,
     ).grid(row=1, column=0, padx=8, pady=5, sticky="ew")
 
     tk.Button(
@@ -690,7 +686,7 @@ def build_manual_setup_tab(app, parent) -> None:
         bd=1,
         relief="raised",
         pady=1,
-        width=10,
+        width=14,
     ).grid(row=2, column=0, padx=8, pady=5, sticky="ew")
 
     tk.Button(
@@ -705,7 +701,7 @@ def build_manual_setup_tab(app, parent) -> None:
         bd=1,
         relief="raised",
         pady=1,
-        width=10,
+        width=14,
     ).grid(row=0, column=1, padx=8, pady=5, sticky="ew")
 
     tk.Button(
@@ -720,7 +716,7 @@ def build_manual_setup_tab(app, parent) -> None:
         bd=1,
         relief="raised",
         pady=1,
-        width=10,
+        width=14,
     ).grid(row=1, column=1, padx=8, pady=5, sticky="ew")
 
     tk.Button(
@@ -735,7 +731,7 @@ def build_manual_setup_tab(app, parent) -> None:
         bd=1,
         relief="raised",
         pady=1,
-        width=10,
+        width=14,
     ).grid(row=2, column=1, padx=8, pady=5, sticky="ew")
 
     # =====================================================

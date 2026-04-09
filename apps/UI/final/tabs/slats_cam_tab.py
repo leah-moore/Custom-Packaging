@@ -55,8 +55,8 @@ def _init_slats_cam_state(app):
     app.feed_windows = []
     app.active_window_index = 0
 
-    app.gantry_width_x_var = tk.StringVar(value="300.0")
-    app.feed_window_y_var = tk.StringVar(value="200.0")
+    app.gantry_width_x_var = tk.StringVar(value="280.0")
+    app.feed_window_y_var = tk.StringVar(value="120.0")
     app.cardboard_offset_x_var = tk.StringVar(value="0.0")
     app.cardboard_offset_y_var = tk.StringVar(value="0.0")
 
@@ -91,11 +91,11 @@ def _init_slats_cam_state(app):
     app.selected_count_var = tk.StringVar(value="Selected: 0 / 0")
     app.window_info_var = tk.StringVar(value="Window: none")
 
-    app.slats_cam_cardboard_width_mm = tk.StringVar(value="300.0")
+    app.slats_cam_cardboard_width_mm = tk.StringVar(value="280.0")
     app.slats_cam_edge_margin_mm = tk.StringVar(value="5.0")
     app.slats_cam_cut_clearance_mm = tk.StringVar(value="1.0")
     app.slats_cam_gap_mm_var = tk.StringVar(value="4.0")
-    app.slats_cam_feed_window_mm = tk.StringVar(value="200.0")
+    app.slats_cam_feed_window_mm = tk.StringVar(value="120.0")
     app.slats_cam_sheet_index_var = tk.StringVar(value="0")
     app.slats_cam_min_sheet_area_var = tk.StringVar(value="50000.0")
 
