@@ -5,13 +5,13 @@ import numpy as np
 # ---------------- USER SETTINGS ----------------
 
 # Input STL (matches your tree)
-INPUT_STL = Path("data/stl/prepared/widePot_aligned.stl")
+INPUT_STL = Path("data/stl/input/asymmetrical/mouse.stl")
 
 # Output STL
-OUTPUT_STL = Path("data/stl/prepared/widePot_scaled.stl")
+OUTPUT_STL = Path("data/stl/prepared/mouse.stl")
 
 # Target size
-TARGET_MAX_DIM_MM = 150.0  # mm
+TARGET_MAX_DIM_MM = 125.0  # mm
 
 # ------------------------------------------------
 

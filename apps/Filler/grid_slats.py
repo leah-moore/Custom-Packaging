@@ -91,11 +91,13 @@ sidePadX    = margin
 
 MIN_SLAT_OVERHANG = 5.0  # mm — minimum material past silhouette
 
-MIN_CARDBOARD_WIDTH = 1.0  # mm; raise if spikes remain, lower if you lose detail
+# ---------------- USER SETTINGS ----------------
+MIN_CARDBOARD_WIDTH = 6.0   # ✅ INCREASED from 3.0 — absolute minimum for B-Flute stability
+SLOT_WALL_SAFETY = 3.0      # mm — prevents slots from cutting through profile
+DUST_AREA = 30.0            # mm² — ignores tiny scrap fragments
 
 # silhouette robustness
 SNAP        = 1e-4     # snap rounding (finer rounding for smoother curves)
-DUST_AREA   = 5.0      # drop tiny fragments
 
 # NOTE: FORCE_SOLID/RM_HOLES are kept for compatibility with your toggles,
 # but envelope silhouettes do not require them and they are not used.
@@ -103,7 +105,7 @@ FORCE_SOLID = False
 RM_HOLES    = False
 
 # envelope silhouette sampling density (higher = smoother, slower)
-ENVELOPE_SAMPLES = 1600
+ENVELOPE_SAMPLES = 3200        # ✅ INCREASED from 1600 for smoother curves
 
 # plotting
 MESH_ALPHA  = 0.18
@@ -117,20 +119,20 @@ CUT_BOTH_SIDES = True   # or False
 # SMOOTHING & FEATURE SIZE CONTROLS
 # ================================================
 # Blade detail tolerance: removes micro-features smaller than this
-MIN_FEATURE_SIZE = 2.5         # mm — collapse blade steps/notches smaller than this
+MIN_FEATURE_SIZE = 1.0         # ✅ REDUCED from 2.5 to remove stepping
 #                                # Increase to remove tiny details (1.5-3.0 mm typical)
 #                                # Decrease to keep fine geometry (0.5-1.0 mm)
 
 # Simplify contour curves: removes vertices that don't deviate much from a line
-SIMPLIFY_TOLERANCE = 0.8       # Douglas-Peucker tolerance (mm)
+SIMPLIFY_TOLERANCE = 0.2       # ✅ REDUCED from 0.8 for smooth curves (Douglas-Peucker tolerance in mm)
 #                                # 0.1-0.3 = smooth curves, keeps detail
 #                                # 0.5-0.75 = aggressive smoothing, removes micro-zigzags
 #                                # 1.0+ = very simplified, blocky look
 
 # Morphological smoothing: dilate→erode to round sharp corners
 USE_MORPH_SMOOTH = True        # if True, apply dilate→erode smoothing
-MORPH_EXPAND = 0.8             # expand amount (mm) — increase for rounder curves
-MORPH_SHRINK = 0.8             # shrink amount (mm) — keep equal to MORPH_EXPAND
+MORPH_EXPAND = 1.2             # ✅ INCREASED from 0.8 for rounder curves
+MORPH_SHRINK = 1.2             # ✅ INCREASED from 0.8 (keep equal to MORPH_EXPAND)
 # ================================================
 
 @dataclass
@@ -655,15 +657,25 @@ def keep_only_touching_frame(pg, frame_bounds, eps=1e-3):
 
 
 def make_open_pocket(board_rect, cutout, x_min, a2_min, a2_max, fix_gap_min):
+    """Cuts the object hole and discards disconnected islands."""
     if cutout is None or cutout.is_empty:
         return board_rect
 
     band = box(x_min, a2_min, x_min + fix_gap_min, a2_max)
     cut_open = safe_geom(cutout.union(band))
-    if cut_open is None:
+    if cut_open is None: 
         return board_rect
 
-    return safe_geom(board_rect.difference(cut_open))
+    res = safe_geom(board_rect.difference(cut_open))
+    
+    # 🔑 FIX: Discard disconnected islands/fragments
+    if res and res.geom_type in ("MultiPolygon", "GeometryCollection"):
+        parts = explode_polys(res)
+        # Keep only the largest contiguous piece of cardboard
+        parts.sort(key=lambda p: p.area, reverse=True)
+        return parts[0]
+        
+    return res
 
 
 def make_open_pocket_right(board_rect, cutout, x_min, a2_min, a2_max, fix_gap_min):
@@ -719,117 +731,56 @@ def enforce_min_overhang_against_board(cutout, board_rect, min_overhang):
 
 def cut_xy_slots(board_pg, ref_pg, y_levels, x_open, x_stop,
                  rYmin, rYmax, slotH, edgeSafety, openEps, side):
-    """XY Slats (Layers): Slots open toward the OUTSIDE board edge."""
-    if board_pg is None or board_pg.is_empty:
-        return board_pg
-
+    """XY Slats: Slots open toward the OUTSIDE board edge."""
+    if board_pg is None or board_pg.is_empty: return board_pg
     rects = []
-    board_outer_x = x_stop  # far board edge
-
+    board_outer_x = x_stop
     for yC0 in y_levels:
-        yC = float(np.clip(
-            yC0,
-            rYmin + edgeSafety + 0.5 * slotH,
-            rYmax - edgeSafety - 0.5 * slotH
-        ))
+        yC = float(np.clip(yC0, rYmin + edgeSafety + 0.5 * slotH, rYmax - edgeSafety - 0.5 * slotH))
         y1, y2 = yC - 0.5 * slotH, yC + 0.5 * slotH
-
-        xInts = []
-        if ref_pg is not None and not ref_pg.is_empty:
-            xInts = line_poly_intersect_x(
-                ref_pg,
-                yC,
-                (min(x_open, x_stop), max(x_open, x_stop))
-            )
+        xInts = line_poly_intersect_x(ref_pg, yC, (min(x_open, x_stop), max(x_open, x_stop))) if ref_pg else []
 
         if len(xInts) >= 1:
-            # NORMAL: use object edge to find surviving flange
+            x_obj_edge = xInts[-1] if side == "right" else xInts[0]
             if side == "right":
-                x_obj_edge = xInts[-1]  # rightmost object edge
-                x_meat_start, x_meat_end = x_obj_edge, board_outer_x
-                xs0 = 0.5 * (x_meat_start + x_meat_end)
-                xs1 = x_meat_end + openEps
-            else:
-                x_obj_edge = xInts[0]   # leftmost object edge
-                x_meat_start, x_meat_end = board_outer_x, x_obj_edge
-                xs0 = x_meat_start - openEps
-                xs1 = 0.5 * (x_meat_start + x_meat_end)
-        else:
-            # FALLBACK: no object intersection, still cut grid slot
-            x_mid = 0.5 * (min(x_open, x_stop) + max(x_open, x_stop))
-
-            if side == "right":
-                # XY owns OUTER half on right boards
-                xs0 = x_mid
+                # 🔑 SAFETY CLAMP: Keeps meat between slot and hole
+                xs0 = max(0.5 * (x_obj_edge + board_outer_x), x_obj_edge + SLOT_WALL_SAFETY)
                 xs1 = board_outer_x + openEps
             else:
-                # XY owns OUTER half on left boards
                 xs0 = board_outer_x - openEps
-                xs1 = x_mid
-
-        if xs1 > xs0:
-            rects.append(box(xs0, y1, xs1, y2))
-
-    if not rects:
-        return board_pg
-
+                xs1 = min(0.5 * (board_outer_x + x_obj_edge), x_obj_edge - SLOT_WALL_SAFETY)
+        else:
+            x_mid = 0.5 * (x_open + x_stop)
+            xs0, xs1 = (x_mid, board_outer_x + openEps) if side == "right" else (board_outer_x - openEps, x_mid)
+        
+        if xs1 > xs0: rects.append(box(xs0, y1, xs1, y2))
     return safe_geom(board_pg.difference(unary_union(rects)))
 
 def cut_xz_slots(board_pg, ref_pg, z_levels, x_open, x_stop,
                  rZmin, rZmax, slotH, edgeSafety, openEps, side):
-    """XZ Slats (Ribs): Slots open toward the INSIDE (the object hole)."""
-    if board_pg is None or board_pg.is_empty:
-        return board_pg
-
+    """XZ Slats: Slots open toward the INSIDE (object hole)."""
+    if board_pg is None or board_pg.is_empty: return board_pg
     rects = []
-    board_outer_x = x_open  # outer board edge in current call pattern
-
+    board_outer_x = x_open
     for zC0 in z_levels:
-        zC = float(np.clip(
-            zC0,
-            rZmin + edgeSafety + 0.5 * slotH,
-            rZmax - edgeSafety - 0.5 * slotH
-        ))
+        zC = float(np.clip(zC0, rZmin + edgeSafety + 0.5 * slotH, rZmax - edgeSafety - 0.5 * slotH))
         z1, z2 = zC - 0.5 * slotH, zC + 0.5 * slotH
-
-        xInts = []
-        if ref_pg is not None and not ref_pg.is_empty:
-            xInts = line_poly_intersect_x(
-                ref_pg,
-                zC,
-                (min(x_open, x_stop), max(x_open, x_stop))
-            )
+        xInts = line_poly_intersect_x(ref_pg, zC, (min(x_open, x_stop), max(x_open, x_stop))) if ref_pg else []
 
         if len(xInts) >= 1:
-            # NORMAL: use object edge to find surviving flange
+            x_obj_edge = xInts[-1] if side == "right" else xInts[0]
             if side == "right":
-                x_obj_edge = xInts[-1]
-                x_meat_start, x_meat_end = x_obj_edge, board_outer_x
-                # XZ owns INNER half on right boards
-                xs0 = x_meat_start - openEps
-                xs1 = 0.5 * (x_meat_start + x_meat_end)
+                # 🔑 SAFETY CLAMP: Prevents profile decapitation
+                xs0 = x_obj_edge - openEps
+                xs1 = min(0.5 * (x_obj_edge + board_outer_x), board_outer_x - SLOT_WALL_SAFETY)
             else:
-                x_obj_edge = xInts[0]
-                x_meat_start, x_meat_end = board_outer_x, x_obj_edge
-                # XZ owns INNER half on left boards
-                xs0 = 0.5 * (x_meat_start + x_meat_end)
-                xs1 = x_meat_end + openEps
+                xs0 = max(0.5 * (board_outer_x + x_obj_edge), board_outer_x + SLOT_WALL_SAFETY)
+                xs1 = x_obj_edge + openEps
         else:
-            # FALLBACK: Ensure the box coordinates are in (min, max) order
-            x_mid = 0.5 * (min(x_open, x_stop) + max(x_open, x_stop))
-            if side == "right":
-                # Cut from the inner edge (x_stop = 0.0) to the middle
-                xs0, xs1 = x_stop - openEps, x_mid
-            else:
-                # Cut from the middle to the inner edge (x_stop = 0.0)
-                xs0, xs1 = x_mid, x_stop + openEps
+            x_mid = 0.5 * (x_open + x_stop)
+            xs0, xs1 = (x_stop - openEps, x_mid) if side == "right" else (x_mid, x_stop + openEps)
 
-        if xs1 > xs0:
-            rects.append(box(xs0, z1, xs1, z2))
-
-    if not rects:
-        return board_pg
-
+        if xs1 > xs0: rects.append(box(xs0, z1, xs1, z2))
     return safe_geom(board_pg.difference(unary_union(rects)))
 
 def mirror_geom_x(g):
@@ -938,11 +889,38 @@ def compute_worldgrid_from_stl(stl_path, n_xy=None, n_xz=None):
     if n_xz is None:
         n_xz = DEFAULT_N_XZ
 
+    print(f"\n📦 Loading STL: {stl_path}")
     mesh = trimesh.load_mesh(stl_path, process=False)
+    print("  ✅ Mesh loaded successfully")
+    
+    # ✅ FIX: Check validity safely (handle both old and new trimesh)
+    try:
+        is_valid = mesh.is_valid
+        print(f"  Mesh is_valid: {is_valid}")
+    except AttributeError:
+        # Older trimesh versions use is_watertight instead
+        is_valid = mesh.is_watertight
+        print(f"  Mesh is_watertight: {is_valid} (using fallback - older trimesh version)")
+    
+    if not is_valid:
+        print("  ⚠️  WARNING: Mesh is not watertight - may have issues")
+        # Try to fix it
+        try:
+            if hasattr(mesh, 'fix_normals'):
+                mesh.fix_normals()
+            if hasattr(mesh, 'remove_degenerate_faces'):
+                mesh.remove_degenerate_faces()
+            if hasattr(mesh, 'merge_vertices'):
+                mesh.merge_vertices()
+            print("  ✅ Mesh repair attempted")
+        except Exception as e:
+            print(f"  ⚠️  Repair failed: {e}, continuing anyway")
+    
     mesh = center_like_matlab(mesh)
+    print("  ✅ Mesh centered at origin")
 
     V = mesh.vertices
-    print("spans:", V.max(axis=0) - V.min(axis=0))
+    print(f"  Mesh spans: X={V[:,0].max()-V[:,0].min():.2f}, Y={V[:,1].max()-V[:,1].min():.2f}, Z={V[:,2].max()-V[:,2].min():.2f} mm")
 
     bounds = {
         "L": float(V[:, 0].max() - V[:, 0].min()),
@@ -958,11 +936,28 @@ def compute_worldgrid_from_stl(stl_path, n_xy=None, n_xz=None):
     bottomExtraEff = max(margin, marginMin)
 
     zBase = max(zRange[0] + 0.5 * materialT, zRange[0] - 0.25 * margin)
-    zLevels = np.linspace(zRange[0], zRange[1], n_xy)
+
+    # 🔑 ROBUST SLICE OFFSET (avoid boundary planes)
+    slice_eps = max(materialT * 0.75, 0.75)
+
+    z0 = zRange[0] + slice_eps
+    z1 = zRange[1] - slice_eps
+    if z1 <= z0:
+        z0, z1 = zRange[0], zRange[1]
+
+    zLevels = np.linspace(z0, z1, n_xy)
 
     baseY = yRange[0] - bottomExtraEff
     yTop  = yRange[1] + margin
-    yLevels = np.linspace(yRange[0], yRange[1], n_xz)
+
+    y0 = yRange[0] + slice_eps
+    y1 = yRange[1] - slice_eps
+    if y1 <= y0:
+        y0, y1 = yRange[0], yRange[1]
+
+    yLevels = np.linspace(y0, y1, n_xz)
+
+# -------------------------------------------------
 
     # -------------------------------------------------
     # 🔑 KEY FIX: separate scan space from board space

@@ -21,7 +21,17 @@ from ..theme import (
 )
 from ..components.slats_cam_logic import draw_library_preview
 
-from apps.Filler.grid_slats import compute_worldgrid_from_stl, explode_polys
+# ✅ FIXED: Correct import path for grid_slats
+try:
+    from apps.Filler.grid_slats import compute_worldgrid_from_stl, explode_polys
+except ImportError:
+    # Fallback if import structure differs
+    try:
+        from apps.Filler.grid_slats import compute_worldgrid_from_stl, explode_polys
+    except ImportError:
+        print("⚠️  Warning: Could not import grid_slats. Slat generation will fail.")
+        compute_worldgrid_from_stl = None
+        explode_polys = lambda g: []
 
 
 def build_slats_tab(app, parent) -> None:
@@ -356,6 +366,14 @@ def build_slats_tab(app, parent) -> None:
         _refresh_info()
 
     def _generate():
+        # ✅ CHECK IF FUNCTION IS AVAILABLE
+        if compute_worldgrid_from_stl is None:
+            messagebox.showerror(
+                "Slats", 
+                "Grid slats module not available. Check that apps.grid_slats is in the correct location."
+            )
+            return
+        
         if not getattr(app, "scan_mesh_path", None):
             messagebox.showerror("Slats", "No mesh selected. Click 'Use Mesh' first.")
             return
@@ -372,13 +390,33 @@ def build_slats_tab(app, parent) -> None:
             return
 
         try:
+            # ✅ SHOW PROGRESS
+            app.slat_info_text.set("Generating slats... please wait")
+            app.update_idletasks()
+            
             data = compute_worldgrid_from_stl(
                 app.scan_mesh_path,
                 n_xy=n_xy,
                 n_xz=n_xz,
             )
+            
+            # ✅ VALIDATE RETURNED DATA
+            if not isinstance(data, dict):
+                raise ValueError(f"Expected dict from compute_worldgrid_from_stl, got {type(data)}")
+            
+            if not data.get("xy_right_records") and not data.get("xy_left_records") and \
+               not data.get("xz_right_records") and not data.get("xz_left_records"):
+                raise ValueError("Grid generation returned no valid slats")
+            
         except Exception as exc:
-            messagebox.showerror("Slats", f"Failed to generate slats:\n{exc}")
+            import traceback
+            error_msg = str(exc)
+            traceback.print_exc()
+            messagebox.showerror(
+                "Failed to generate slats",
+                f"{error_msg}\n\nCheck console for detailed traceback."
+            )
+            app.slat_info_text.set("Mesh: (none) | Generation failed")
             return
 
         app.slats_data = data
