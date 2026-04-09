@@ -9,8 +9,8 @@ Rules:
 """
 
 import matplotlib.pyplot as plt
-from Box.boxes import gen_RSC, gen_OTE
-from Box.boxes import rebuild_edges_and_reclassify
+from apps.Box.boxes import gen_RSC, gen_OTE
+from apps.Box.boxes import rebuild_edges_and_reclassify
 
 import math
 

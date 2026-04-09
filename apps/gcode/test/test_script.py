@@ -71,8 +71,8 @@ def run_job():
     # --- DESIGN COMMANDS ---
     # Keep these simple and small while testing.
     commands = [
-        "SQUARE 0 0 100 knife",
-        "CREASE -50 70 50 70",
+        "SQUARE 0 0 50 knife",
+        #"CREASE -50 70 50 70",
     ]
 
     ops = []

@@ -13,7 +13,7 @@ Z_KNIFE  = 0.0       # Knife side down
 Z_CREASE = 3.0       # Crease side down
 
 FEED_Z         = 1000
-FEED_XY_KNIFE  = 3000   # XY cutting feed for knife moves
+FEED_XY_KNIFE  = 2000   # XY cutting feed for knife moves
 FEED_B_KNIFE   = 2000   # B-axis pivot/angle feed for knife moves
 FEED_CREASE    = 300
 FEED_ROLLERS   = 200
