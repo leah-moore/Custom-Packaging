@@ -765,7 +765,6 @@ def cut_xy_slots(pg_xy, y_levels, x_open, x_stop,
 
     return safe_geom(pg_xy.difference(unary_union(rects)))
 
-
 def cut_xz_slots(pg_xz, z_levels, x_open, x_stop,
                  rZmin, rZmax, slotH, edgeSafety, openEps):
     if pg_xz is None or pg_xz.is_empty:
@@ -798,13 +797,13 @@ def cut_xz_slots(pg_xz, z_levels, x_open, x_stop,
                 continue
 
             if x_open < x_stop:
-                # right board: cut from X=0 → midpoint
-                xs0 = x_open - openEps
-                xs1 = x_mid
-            else:
-                # left board: cut from X=0 → midpoint
-                xs1 = x_open + openEps
+                # right board: cut from FAR EDGE -> midpoint
                 xs0 = x_mid
+                xs1 = x_stop + openEps
+            else:
+                # left board: cut from FAR EDGE -> midpoint
+                xs0 = x_stop - openEps
+                xs1 = x_mid
 
             if xs1 > xs0:
                 rects.append(box(xs0, z1, xs1, z2))
@@ -813,7 +812,6 @@ def cut_xz_slots(pg_xz, z_levels, x_open, x_stop,
         return pg_xz
 
     return safe_geom(pg_xz.difference(unary_union(rects)))
-
 
 def mirror_geom_x(g):
     if g is None or g.is_empty:
@@ -1213,8 +1211,8 @@ def compute_worldgrid_from_stl(stl_path, n_xy=None, n_xz=None):
         cut_xz_slots(
             pg,
             zLevels,
-            x_open=0.0,
-            x_stop=rXmax,
+            x_open=rXmax,
+            x_stop=0.0,
             rZmin=rZmin,
             rZmax=rZmax,
             slotH=slotH,
@@ -1228,8 +1226,8 @@ def compute_worldgrid_from_stl(stl_path, n_xy=None, n_xz=None):
         cut_xz_slots(
             pg,
             zLevels,
-            x_open=0.0,
-            x_stop=-boardW,
+            x_open=-boardW,
+            x_stop=0.0,
             rZmin=rZmin,
             rZmax=rZmax,
             slotH=slotH,
